@@ -5,7 +5,9 @@ import os
 import argparse
 import json
 import time
-from pyroute2 import NetNS
+from pyroute2 import NetNS, IPRoute
+from pyroute2.netns import create as ns_create
+import threading
 
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
@@ -36,6 +38,9 @@ rx_namespace = args.rx_namespace
 bitrate = args.bitrate
 duration = args.duration
 
+threads = []
+stop_collection = threading.Event()
+
 STAT_NAMES = {
     "TX": (
         "tx_packets",
@@ -53,34 +58,46 @@ STAT_NAMES = {
     )
 }
 
-# reading virtual files in /sys/class/net/<interface>/statistics to inspect rx/tx drops/errors
-# iperf3 fundamentally does the same thing but operates at layer 3 rather than our goal of layer 2 
-# namesapce in which the benchmark process is running denoted by None
-def get_nic_stats(interface, is_rx, namespace):
-    direction = "RX" if is_rx else "TX"
-    if namespace is None:
-        # Reads Layer 2 rx/tx drops and errors directly from the Linux kernel.
-        stats_dir = Path("/sys/class/net") / interface / "statistics"
-        # Read a single integer directly from its own virtual file
-        return {
-                name: int((stats_dir / name).read_text().strip())
-                for name in STAT_NAMES[direction]
-            }
-    else:
-        #PyRoute switches the network namespace temporarily
-        with NetNS(namespace) as ns:
-            # links is the dict with metadata about interface
-            links = ns.get_links(ifname=interface)
-            if links:
-                print(links[0])
-                stats = links[0]['stats']
-                return {
-                    name: int(stats.get(name.lower(), 0))
-                    for name in STAT_NAMES[direction]
-                }
-            return None
-        return None
+realtime_telem = {
+    "RX" : {},
+    "TX" : {}
+}
 
+def create_rx_namespace():
+    ns_create(rx_namespace)
+
+def get_interface_index(name, namespace=None):
+    with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
+        indices = ipr.link_lookup(ifname=name)
+        if not indices:
+            raise ValueError(f"Interface '{name}' not found at startup.")
+        return indices[0]
+
+# inspect statistics like packet drop and throughput for a network interface 
+# for interfaces within the default namespace reading the contents of the virtual file 
+# /sys/class/net/<interface>/statistics is fine, but interfaces in alternate namespaces wouldn't show up there
+# so this function uses pyroute2/netlink to fetch those same statistics, 
+# but not by reading a virtual file directly 
+def get_nic_stats(itf_idx, is_rx, namespace=None):
+    global realtime_telem, stop_collection
+    direction = "RX" if is_rx else "TX"
+    with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
+        while not stop_collection.is_set():
+            # Request specific link info including binary attributes
+            link_data = ipr.get_links(itf_idx)[0]
+            # Convert attributes tuple list into a workable dictionary
+            attrs = dict(link_data['attrs'])        
+            # 'IFLA_STATS' contains the exact mirror of the /sys/../statistics files
+            stats = attrs.get('IFLA_STATS')
+            for stat in stats.keys():
+                if stat in STAT_NAMES[direction]:
+                    realtime_telem[direction][stat] = (time.time(), stats.get(stat, 0)) 
+            time.sleep(0.1)
+
+def get_nic_stats_snapshot(is_rx):
+    global realtime_telem
+    return realtime_telem["RX" if is_rx else "TX"]
+       
 def generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration):
     # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
     print(f"Saturating link to {rx_ip} via {tx_intf}...")
@@ -137,19 +154,21 @@ def get_intf_info(intf_name):
 def calculate_deltas(initial, final):
     delta = {}
     for key in initial:
-        delta[key] = final[key] - initial[key]
+        delta[key] = final[key][1] - initial[key][1]
     return delta
 
-def run_test(rx_intf, tx_intf):
+def run_test(rx_intf_idx, tx_intf_idx):
+    global stop_collection, tx_interface
     # 1. Snapshot L2 stats before the stress test
     ms_start = int(time.time() * 1000)
-    initial_l2_rx = get_nic_stats(rx_intf, True, rx_namespace)
-    initial_l2_tx = get_nic_stats(tx_intf, False, None)
+    initial_l2_rx = get_nic_stats_snapshot(True)
+    initial_l2_tx = get_nic_stats_snapshot(False)
     # 2. generate traffic
-    summary = generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration)
+    summary = generate_traffic(rx_ip, tx_ip, tx_interface, bitrate, duration)
+    stop_collection.set()
     # 3. Snapshot L2 stats immediately after the test
-    final_l2_rx = get_nic_stats(rx_intf, True, rx_namespace)
-    final_l2_tx = get_nic_stats(tx_intf, False)
+    final_l2_rx = get_nic_stats_snapshot(True)
+    final_l2_tx = get_nic_stats_snapshot(False)
     ms_end = int(time.time() * 1000)
     # 4. Calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
@@ -171,14 +190,24 @@ def run_test(rx_intf, tx_intf):
     print(f"Loss percent: {summary["lost_percent"]}")
     print(f"Jitter ms: {summary["jitter_ms"]}")
 
+
 def launch_server():
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
-    cmd = ["sudo", "ip", "netns", "exec", rx_namespace, "iperf3", "-s", "-B", rx_ip]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = ["ip", "netns", "exec", rx_namespace, "iperf3", "-s", "-1", "-B", rx_ip]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     
 if __name__ == "__main__":
+    create_rx_namespace()
     scan_interfaces()
     get_intf_info(rx_interface)
     get_intf_info(tx_interface)
+    rx_itf_idx = get_interface_index(rx_interface, rx_namespace)
+    tx_itf_idx = get_interface_index(tx_interface)
+    threads = [
+        threading.Thread(target=get_nic_stats, args=(rx_itf_idx, True, rx_namespace)),
+        threading.Thread(target=get_nic_stats, args=(tx_itf_idx, False))
+    ]
+    for thread in threads:
+        thread.start()
     launch_server()
-    run_test(rx_interface, tx_interface)
+    run_test(rx_itf_idx, tx_itf_idx)
