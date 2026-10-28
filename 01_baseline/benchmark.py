@@ -40,6 +40,7 @@ duration = args.duration
 
 threads = []
 stop_collection = threading.Event()
+snapshot_lock = threading.Lock()
 
 STAT_NAMES = {
     "TX": (
@@ -63,8 +64,18 @@ realtime_telem = {
     "TX" : {}
 }
 
-def create_rx_namespace():
+def setup_network(rx_itf_idx, tx_itf_idx):
+    global rx_ip, tx_ip
     ns_create(rx_namespace)
+    with IPRoute() as ipr:
+        # add the rx interface to the rx namespace
+        ipr.link("set", index=rx_itf_idx, net_ns_fd=rx_namespace)
+        # assign the static IP for rx and tx    
+        ipr.addr("add", index=rx_itf_idx, address=rx_ip, prefixlen=24)
+        ipr.addr("add", index=tx_itf_idx, address=tx_ip, prefixlen=24)
+        # bring the interface up
+        ipr.link("set", index=rx_itf_idx, state="up")
+
 
 def get_interface_index(name, namespace=None):
     with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
@@ -79,7 +90,7 @@ def get_interface_index(name, namespace=None):
 # so this function uses pyroute2/netlink to fetch those same statistics, 
 # but not by reading a virtual file directly 
 def get_nic_stats(itf_idx, is_rx, namespace=None):
-    global realtime_telem, stop_collection
+    global realtime_telem, stop_collection, snapshot_lock
     direction = "RX" if is_rx else "TX"
     with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
         while not stop_collection.is_set():
@@ -87,16 +98,18 @@ def get_nic_stats(itf_idx, is_rx, namespace=None):
             link_data = ipr.get_links(itf_idx)[0]
             # Convert attributes tuple list into a workable dictionary
             attrs = dict(link_data['attrs'])        
-            # 'IFLA_STATS' contains the exact mirror of the /sys/../statistics files
-            stats = attrs.get('IFLA_STATS')
-            for stat in stats.keys():
-                if stat in STAT_NAMES[direction]:
-                    realtime_telem[direction][stat] = (time.time(), stats.get(stat, 0)) 
+            # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
+            stats = attrs.get('IFLA_STATS64')
+            with snapshot_lock:
+                for stat in stats.keys():
+                    if stat in STAT_NAMES[direction]:
+                        realtime_telem[direction][stat] = (time.time(), stats.get(stat, 0)) 
             time.sleep(0.1)
 
 def get_nic_stats_snapshot(is_rx):
-    global realtime_telem
-    return realtime_telem["RX" if is_rx else "TX"]
+    global realtime_telem, snapshot_lock
+    with snapshot_lock:
+        return realtime_telem["RX" if is_rx else "TX"].copy()
        
 def generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration):
     # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
@@ -158,7 +171,7 @@ def calculate_deltas(initial, final):
     return delta
 
 def run_test(rx_intf_idx, tx_intf_idx):
-    global stop_collection, tx_interface
+    global stop_collection, tx_interface, threads
     # 1. Snapshot L2 stats before the stress test
     ms_start = int(time.time() * 1000)
     initial_l2_rx = get_nic_stats_snapshot(True)
@@ -166,6 +179,8 @@ def run_test(rx_intf_idx, tx_intf_idx):
     # 2. generate traffic
     summary = generate_traffic(rx_ip, tx_ip, tx_interface, bitrate, duration)
     stop_collection.set()
+    for thread in threads:
+        thread.join()
     # 3. Snapshot L2 stats immediately after the test
     final_l2_rx = get_nic_stats_snapshot(True)
     final_l2_tx = get_nic_stats_snapshot(False)
@@ -197,12 +212,12 @@ def launch_server():
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     
 if __name__ == "__main__":
-    create_rx_namespace()
     scan_interfaces()
     get_intf_info(rx_interface)
     get_intf_info(tx_interface)
     rx_itf_idx = get_interface_index(rx_interface, rx_namespace)
     tx_itf_idx = get_interface_index(tx_interface)
+    create_rx_namespace(rx_itf_idx)
     threads = [
         threading.Thread(target=get_nic_stats, args=(rx_itf_idx, True, rx_namespace)),
         threading.Thread(target=get_nic_stats, args=(tx_itf_idx, False))
