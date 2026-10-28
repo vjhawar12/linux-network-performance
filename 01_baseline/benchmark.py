@@ -7,6 +7,17 @@ import json
 import time
 from pyroute2 import NetNS
 
+""" 
+Sending packets from one network interface to another on the linux machine with the switch in between 
+and inspecting packet drop statistics for Layer 2. The machine has 2 NICs which are being used as interface 1 and 2. 
+NIC1 -> Source port on switch -> Destination port on switch -> NIC 2
+iperf3 operates at Layer 4 and generates UDP/TCP packets to verify if each packet sent was received. 
+Layer 2 packet drop statistics need to be examined by reading virtual files on the linux machine. 
+Both interfaces need to be assigned ip addresses with one designated as 'client' / 'tx' and the other 'server' / 'rx'
+The linux kernel routes packets going from one interface to another on the same machine internally not neccessarily 
+over the switch as we intend to. Using network namespaces isolates interfaces to get around that.
+"""
+
 parser = argparse.ArgumentParser()
 parser.add_argument("tx_interface")
 parser.add_argument("rx_interface")
@@ -42,36 +53,38 @@ STAT_NAMES = {
     )
 }
 
-def read_from_vf(stats_dir, is_rx):
-    # Read a single integer directly from its own virtual file
-    if is_rx:
-        return {
-            name: int((stats_dir / name).read_text().strip())
-            for name in STAT_NAMES["RX"]
-        }
-    else:
-        return {
-            name: int((stats_dir / name).read_text().strip())
-            for name in STAT_NAMES["TX"]
-        }
-
 # reading virtual files in /sys/class/net/<interface>/statistics to inspect rx/tx drops/errors
 # iperf3 fundamentally does the same thing but operates at layer 3 rather than our goal of layer 2 
+# namesapce in which the benchmark process is running denoted by None
 def get_nic_stats(interface, is_rx, namespace):
-    if namespace == DEFAULT_NAMESPACE:
-        """Reads Layer 2 rx/tx drops and errors directly from the Linux kernel."""
+    direction = "RX" if is_rx else "TX"
+    if namespace is None:
+        # Reads Layer 2 rx/tx drops and errors directly from the Linux kernel.
         stats_dir = Path("/sys/class/net") / interface / "statistics"
-        return read_from_vf(stats_dir, is_rx)
+        # Read a single integer directly from its own virtual file
+        return {
+                name: int((stats_dir / name).read_text().strip())
+                for name in STAT_NAMES[direction]
+            }
     else:
-        """PyRoute switches the network namespace temporarily"""
-        with NetNS("myns"):
-            with open(Path("/sys/class/net") / interface / "statistics") as stats_dir:
-                return read_from_vf(stats_dir, is_rx)
+        #PyRoute switches the network namespace temporarily
+        with NetNS(namespace) as ns:
+            # links is the dict with metadata about interface
+            links = ns.get_links(ifname=interface)
+            if links:
+                print(links[0])
+                stats = links[0]['stats']
+                return {
+                    name: int(stats.get(name.lower(), 0))
+                    for name in STAT_NAMES[direction]
+                }
+            return None
+        return None
 
 def generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration):
     # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
-    print(f"Saturating link to {server_ip} via {tx_intf}...")
-    cmd = ["iperf3", "-c", rx_ip, "-B", tx_ip, "--bind-dev", tx_intf, "-u", "-b", bitrate, "-t", duration, "-J"]
+    print(f"Saturating link to {rx_ip} via {tx_intf}...")
+    cmd = ["iperf3", "-c", rx_ip, "-B", tx_ip, "--bind-dev", tx_intf, "-u", "-b", bitrate, "-t", str(duration), "-J"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     report = json.loads(result.stdout)
     summary = report["end"]["sum"]
@@ -130,12 +143,12 @@ def calculate_deltas(initial, final):
 def run_test(rx_intf, tx_intf):
     # 1. Snapshot L2 stats before the stress test
     ms_start = int(time.time() * 1000)
-    initial_l2_rx = get_nic_stats(rx_intf, True)
-    initial_l2_tx = get_nic_stats(tx_intf, False)
+    initial_l2_rx = get_nic_stats(rx_intf, True, rx_namespace)
+    initial_l2_tx = get_nic_stats(tx_intf, False, None)
     # 2. generate traffic
     summary = generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration)
     # 3. Snapshot L2 stats immediately after the test
-    final_l2_rx = get_nic_stats(rx_intf, True)
+    final_l2_rx = get_nic_stats(rx_intf, True, rx_namespace)
     final_l2_tx = get_nic_stats(tx_intf, False)
     ms_end = int(time.time() * 1000)
     # 4. Calculate deltas
@@ -154,11 +167,18 @@ def run_test(rx_intf, tx_intf):
     print(f"TX drops: {delta_tx['tx_dropped']}")
     print(f"TX errors: {delta_tx['tx_errors']}")
     print("\n=== IPERF3 SUMMARY ===")
-    print(f"Bits per second: {summary[bits_ps]}")
+    print(f"Bits per second: {summary["bits_per_second"]}")
     print(f"Loss percent: {summary["lost_percent"]}")
-    print(f"Jitter ms: {summary[jitter_ms]}")
+    print(f"Jitter ms: {summary["jitter_ms"]}")
+
+def launch_server():
+    # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
+    cmd = ["sudo", "ip", "netns", "exec", rx_namespace, "iperf3", "-s", "-B", rx_ip]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
 if __name__ == "__main__":
     scan_interfaces()
     get_intf_info(rx_interface)
     get_intf_info(tx_interface)
+    launch_server()
     run_test(rx_interface, tx_interface)
