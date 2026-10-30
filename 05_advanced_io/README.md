@@ -21,4 +21,4 @@ Confirmed physical path and saved [Phase A](../01_baseline/README.md) results; e
 
 ## Exit criteria
 
-A documented apples-to-apples comparison and recommendation about whether advanced packet I/O is worthwhile for the LAN9693 validation workload.
+A documented apples-to-apples comparison and recommendation about whether advanced packet I/O is worthwhile for the 10 GbE switch validation workload.
