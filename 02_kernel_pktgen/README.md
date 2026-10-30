@@ -10,7 +10,7 @@ Use the Linux kernel's `pktgen` facility to explore high packet-per-second workl
 
 - Review `pktgen` kernel module availability and control through `/proc/net/pktgen`.
 - Choose the transmitting NIC/queue, frame sizes, thread/CPU mapping, and offered traffic volume.
-- Measure achieved NIC TX rates, receiver-side counts/drops, CPU load, and (if accessible) LAN9693 port counters.
+- Measure achieved NIC TX rates, receiver-side counts/drops, CPU load, and (if accessible) external-switch port counters.
 - Evaluate sensitivity to small frames, queue mapping, and CPU placement.
 
 `pktgen` sending packets is **not by itself proof of switch forwarding or end-to-end reception**. The receiver and switch must still be observed. Configuring pktgen may require root access and can generate very high traffic loads.
