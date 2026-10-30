@@ -1,0 +1,29 @@
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+env/
+
+.env
+.env.*
+!.env.example
+
+# Local editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Generated benchmark output and packet captures
+results/
+captures/
+*.pcap
+*.pcapng
+*.log
+perf.data*
