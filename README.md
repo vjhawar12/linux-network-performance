@@ -1,8 +1,17 @@
 # Linux Network Performance
 
-A staged Linux networking project for characterizing high-speed Ethernet traffic, observing host/NIC behavior, and investigating performance bottlenecks. The initial target is a **10 GbE forwarding path through a Microchip LAN9693 switch**, using Linux network interfaces as the traffic source and sink.
+A staged Linux networking project for characterizing high-speed Ethernet traffic, Linux host/NIC behavior, and performance bottlenecks. The proposed experiment is a **10 GbE host–switch–host forwarding path through an external Ethernet switch test board**. This is distinct from the separate SAMV71/LAN9693 firmware-porting work.
 
-> **Project status:** Phase A (baseline benchmarking) is under development. The Python script is a prototype with known runtime issues. No switch-throughput or packet-loss result has been validated or published in this repository.
+> **Status (October 2026):** Phase A is an **in-development Python prototype**, not a working or validated benchmark. The repository contains no verified switch-throughput, packet-loss, or 10 Gb/s performance results. Phases B–E are design roadmaps only.
+
+## What's implemented today
+
+- Python CLI options for two NIC interfaces, destination/source IPs, namespace, offered bitrate and duration.
+- Initial UDP `iperf3` subprocess integration and JSON reporting logic (needs error-handling/schema fixes).
+- A threaded TX/RX statistics polling design using `pyroute2`/rtnetlink `IFLA_STATS64`, snapshots, and counter deltas.
+- Host interface inspection with `psutil` and sysfs; preliminary network-namespace setup and server launch helpers.
+
+**Not yet complete:** safe namespace creation/configuration, end-to-end execution, verified physical traffic through the switch, error handling, automated tests, saved reports, and repeatable performance measurements. The source is **not a ready-to-run benchmark**; see [Phase A blockers](01_baseline/README.md#known-blockers-at-current-head).
 
 ## Test topology
 
@@ -18,7 +27,7 @@ The intended baseline uses **two distinct physical Ethernet ports**, potentially
     +------|------------------|--------+
            |                  |
            v                  |
-     LAN9693 ingress --> LAN9693 egress
+     Switch ingress --> Switch egress
          (external switch forwarding)
 ```
 
@@ -45,7 +54,7 @@ A useful benchmark combines **multiple independent observation points**:
 - **Application:** iperf3 sender/receiver bitrate, UDP sequence-based loss, jitter, duration.
 - **Host network interface:** `/sys/class/net/<interface>/statistics/` counters such as TX/RX packets, bytes, drops, and errors.
 - **NIC/driver:** `ethtool -S <interface>` (e.g., Intel `i40e` per-queue and port counters).
-- **Switch:** LAN9693 ingress/egress counters when available (future integration).
+- **Switch:** external switch ingress/egress counters if available (future integration).
 
 An iperf3 loss number is not equivalent to NIC `rx_dropped`; a zero NIC error count does not prove the external switch never discarded packets. Counters are cumulative and must be compared before and after a controlled run. Background traffic and different hardware accounting points can affect comparisons.
 
@@ -61,4 +70,4 @@ See [Phase A](01_baseline/README.md) for the current implementation and its outs
 
 ## Current code
 
-`01_baseline/benchmark.py` is the only implemented benchmark source at present. Planned local requirements include Linux, Python, `iperf3`, `iproute2`, `ethtool`, and Python packages `psutil` and `pyroute2` (the current script imports them). The existing namespace/statistics and iperf3 reporting code needs fixes **before the script can be treated as runnable**.
+`01_baseline/benchmark.py` is the only implemented benchmark source at present. Planned local requirements include Linux, Python, `iperf3`, `iproute2`, `ethtool`, and Python packages `psutil` and `pyroute2` (the current script imports them). Namespace setup, counter initialization, and iperf3 reporting require fixes **before it can be treated as runnable or used for measurements**. The code presently cannot complete the described benchmark end-to-end.
