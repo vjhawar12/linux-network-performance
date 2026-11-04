@@ -20,19 +20,21 @@ std::vector<std::unique_ptr<nw_intf_t>> nw_intf_list;
 int nw_intf_t::length = 0;
 
 void discover_interfaces() {
-    ifaddrs* addr; 
-    int ret = getifaddrs(&addr);
+    ifaddrs* raw_addr; 
+    int ret = getifaddrs(&raw_addr);
     if (ret == 0) {
-        while (addr != nullptr) {
+        std::unique_ptr<ifaddrs, void(*)(ifaddrs*)> head(raw_addr, freeifaddrs); 
+        ifaddrs* temp = head.get();
+        while (temp != nullptr) {
             nw_intf_t::length++;
-            const char * const name = addr->ifa_name;
-            bool software_enabled = addr->ifa_flags & IFF_UP; 
-            bool physical_link_enabled = addr->ifa_flags & IFF_LOWER_UP;
-            bool is_running = addr->ifa_flags & IFF_RUNNING;
-            bool promisc_mode = addr->ifa_flags & IFF_PROMISC; 
+            const char * const name = temp->ifa_name;
+            bool software_enabled = temp->ifa_flags & IFF_UP; 
+            bool physical_link_enabled = temp->ifa_flags & IFF_LOWER_UP;
+            bool is_running = temp->ifa_flags & IFF_RUNNING;
+            bool promisc_mode = temp->ifa_flags & IFF_PROMISC; 
             nw_intf_list.push_back(std::make_unique<nw_intf_t>(name, software_enabled, physical_link_enabled, is_running, promisc_mode)); 
-            addr = addr->ifa_next;
-        }
+            temp = temp->ifa_next;
+        } 
         if (nw_intf_t::length == 0) {
             throw InterfaceDiscoveryException("No network interfaces found!");
         }

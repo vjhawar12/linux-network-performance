@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/vedant/projects/linux-network-performance/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

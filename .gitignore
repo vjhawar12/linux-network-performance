@@ -27,3 +27,6 @@ captures/
 *.pcapng
 *.log
 perf.data*
+
+# CMake build outputs
+/build/
