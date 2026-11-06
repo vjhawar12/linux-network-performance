@@ -3,5 +3,5 @@
 
 int main(int, char**){
     std::cout << "Hello, from linux-network-performance!\n";
-    app(NULL); 
+    return app(nullptr); 
 }
