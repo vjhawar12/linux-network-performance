@@ -10,7 +10,12 @@ A5: physical verification on hardware
 */
 
 #include "baseline.h"
+#include "thread_safe_queue.h"
+#include <chrono>
+#include <condition_variable>
 #include <ifaddrs.h>
+#include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <memory>
 #include <net/if.h>
@@ -19,10 +24,15 @@ A5: physical verification on hardware
 #include <linux/rtnetlink.h>
 #include <errno.h>
 #include <thread>
+#include <utility>
 
-std::unordered_map<int, std::unique_ptr<nw_intf_t>> nw_intf_list; 
+ThreadSafeQueue<std::pair<int, std::pair<NetworkEvent, bool>>, 16> queue;
+std::mutex mtx;
+std::condition_variable cv;
+std::unique_lock<std::mutex> lock(mtx);
+bool ready;
 
-void discover_interfaces() {
+void discover_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& intf_map) {
     ifaddrs* raw_addr; 
     int ret = getifaddrs(&raw_addr);
     if (ret == 0) {
@@ -32,28 +42,36 @@ void discover_interfaces() {
             const char * const name = temp->ifa_name;
             bool software_enabled = temp->ifa_flags & IFF_UP; 
             bool physical_link_up = temp->ifa_flags & IFF_LOWER_UP;
-            bool is_running = temp->ifa_flags & IFF_RUNNING;
+            bool carrier_detected = temp->ifa_flags & IFF_RUNNING;
             bool promisc_mode = temp->ifa_flags & IFF_PROMISC; 
             int idx = if_nametoindex(name); 
             if (idx == 0) {
                 std::string err = "No interface found: errno = " + std::to_string(errno);
                 throw InterfaceDiscoveryException(err);
-            } else if (nw_intf_list.find(idx) != nw_intf_list.end()) {
-                nw_intf_list[idx] = std::make_unique<nw_intf_t>(std::string(name), software_enabled, physical_link_up, is_running, promisc_mode, idx); 
+            } else if (intf_map.find(idx) != intf_map.end()) {
+                intf_map[idx] = std::make_unique<nw_intf_t>(std::string(name), software_enabled, physical_link_up, carrier_detected, promisc_mode, idx); 
             }
             temp = temp->ifa_next;
         } 
-        if (nw_intf_list.size() == 0) {
+        if (intf_map.size() == 0) {
             throw InterfaceDiscoveryException("No network interfaces found!");
         }
     } else {
         throw InterfaceDiscoveryException("Unable to discover interfaces with getifaddrs()!");
     }
 }
+
+void print_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& intf_map) {
+    for (auto it = intf_map.begin(); it != intf_map.end(); it++) {
+        std::cout << *(it->second) <<  std::endl;
+    }
+}
+
 // monitoring real time changes to network interfaces like link up/down status
 // using netlink rather than raw system calls to virtual files to interface with the linux subsystem and get notified automatically 
 // rather than polling for changes
-void get_interface_info() {
+void monitor_interfaces() {
+    std::lock_guard<std::mutex> lock(mtx);
     // opening netlink socket to kernel
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     // listen for changes in link status
@@ -63,7 +81,7 @@ void get_interface_info() {
     char buf[4096]; 
     ssize_t bytes_received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT); 
     // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
-    nlmsghdr *header = reinterpret_cast<nlmsghdr*>(buf); 
+    nlmsghdr* header = reinterpret_cast<nlmsghdr*>(buf); 
     ifinfomsg* temp = NULL; 
     bool new_interface_found = false;
     int idx = -1;
@@ -77,46 +95,84 @@ void get_interface_info() {
             temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
             // ifi_index is the same interface index being used in nw_intf_t
             idx = temp->ifi_index;
-            if (nw_intf_list.find(idx) == nw_intf_list.end()) {
-                char* buff;
-                if_indextoname(idx, buff);
-                nw_intf_list[idx] = std::make_unique<nw_intf_t>(std::string(buff), false, false, false, false, idx); 
-            }
+            char* buff;
+            if_indextoname(idx, buff);
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDiscoveredEvent, 1)));
             // update state based on flags
-            nw_intf_list[idx]->software_enabled = temp->ifi_flags & IFF_UP; 
-            nw_intf_list[idx]->physical_link_up = temp->ifi_flags & IFF_LOWER_UP;
-            nw_intf_list[idx]->is_running = temp->ifi_flags & IFF_RUNNING;
-            nw_intf_list[idx]->promisc_mode = temp->ifi_flags & IFF_PROMISC; 
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::SoftwareEnabledEvent, (temp->ifi_flags & IFF_UP) != 0)));
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PhysicalLinkDetectedEvent, (temp->ifi_flags & IFF_LOWER_UP) != 0)));
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::CarrierDetectedEvent, (temp->ifi_flags & IFF_RUNNING) != 0)));
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PromiscModeDetectedEvent, (temp->ifi_flags & IFF_PROMISC) != 0)));
+            ready = true;
+            cv.notify_one();
             break;
         case RTM_DELLINK: // called when the interface is disconnecting 
             temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
             // ifi_index is the same interface index being used in nw_intf_t
             idx = temp->ifi_index;
-            // remove interface from map
-            if (nw_intf_list.erase(idx) == 1) {
-
-            } 
+            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDisconnectedEvent, 1)));
+            ready = true;
+            cv.notify_one();
             break;
         default:
             break;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
 }
 
 int app(void* args) noexcept {
-    (void*)args;
+    (void)args;
+    std::unordered_map<int, std::unique_ptr<nw_intf_t>> nw_intf_list; 
     try {
-        discover_interfaces();
+        discover_interfaces(nw_intf_list);
     } catch (const InterfaceDiscoveryException& e) {
         std::cerr << "Caught: " << e.what() << std::endl;
         return 1; 
     } catch (const std::exception& e) {
         std::cerr << "Unexpected exception: " << e.what() << std::endl;
     }
+    std::cout << "Initial Interface Discovery" << std::endl;
     for (const auto& [idx, obj] : nw_intf_list) {
         std::cout << *obj << std::endl;
     }
     // creating thread for get_interface_info
-    std::thread interface_monitor(get_interface_info);
-    interface_monitor.join();
+    std::thread interface_monitor(monitor_interfaces);
+    interface_monitor.detach();
+    // responding to real time events
+    while (1) {
+        cv.wait(lock, [] {return ready;}); 
+        ready = false;
+        auto item = queue.get();
+        if (item == std::nullopt) continue; 
+        int idx = item->first;
+        char* buff = NULL;
+        int ret = 0;
+        NetworkEvent event_type = item->second.first;
+        bool event_state = item->second.second;
+        switch (event_type) {
+            case NetworkEvent::InterfaceDiscoveredEvent:
+                if_indextoname(idx, buff); 
+                nw_intf_list[idx] = std::make_unique<nw_intf_t>(std::string(buff), idx); 
+                break;
+            case NetworkEvent::InterfaceDisconnectedEvent:
+                ret = nw_intf_list.erase(idx); 
+                break;
+            case NetworkEvent::CarrierDetectedEvent:
+                nw_intf_list[idx]->carrier_detected = event_state;
+                break;
+            case NetworkEvent::SoftwareEnabledEvent:
+                nw_intf_list[idx]->software_enabled = event_state;
+                break;
+            case NetworkEvent::PhysicalLinkDetectedEvent:
+                nw_intf_list[idx]->physical_link_up = event_state;
+                break;
+            case NetworkEvent::PromiscModeDetectedEvent:
+                nw_intf_list[idx]->promisc_mode = event_state; 
+                break;
+            default:
+                break;
+        }
+        print_interfaces(nw_intf_list); 
+    } 
     return 0;
 }

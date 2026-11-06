@@ -3,10 +3,20 @@
 
 #include <string>
 #include <iostream>
+#include <stdint.h>
 
 class InterfaceDiscoveryException : public std::runtime_error {
     using std::runtime_error::runtime_error;
 }; 
+
+enum class NetworkEvent : uint8_t {
+    InterfaceDiscoveredEvent,
+    InterfaceDisconnectedEvent,
+    SoftwareEnabledEvent,
+    PhysicalLinkDetectedEvent,
+    CarrierDetectedEvent,
+    PromiscModeDetectedEvent
+};
 
 class nw_intf_t {
 public:
@@ -14,14 +24,21 @@ public:
     std::string name;
     bool software_enabled;
     bool physical_link_up;
-    bool is_running;
+    bool carrier_detected;
     bool promisc_mode;
 
-    nw_intf_t(const std::string &_name, bool _software_enabled, bool _physical_link_up, bool _is_running, bool _promisc_mode, int _idx) : idx(_idx), name(std::move(_name)) {
+    nw_intf_t(const std::string &_name, bool _software_enabled, bool _physical_link_up, bool _carrier_detected, bool _promisc_mode, int _idx) : idx(_idx), name(std::move(_name)) {
         software_enabled = _software_enabled;
         physical_link_up = _physical_link_up;
-        is_running = _is_running;
+        carrier_detected = _carrier_detected;
         promisc_mode = _promisc_mode;
+    }
+
+    nw_intf_t(const std::string &_name, int _idx) : idx(_idx), name(std::move(_name)) {
+        software_enabled = false;
+        physical_link_up = false;
+        carrier_detected = false;
+        promisc_mode = false;
     }
     
     // network interface object does not hold system resources; allowed to be copyable/moveable
@@ -37,7 +54,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const nw_intf_t& other) {
         os << "INTF " << other.name  << " IDX " << other.idx << " LINK UP " << (other.physical_link_up? "UP" : "DOWN") 
         << " SW ENABLED " << (other.software_enabled? "TRUE" : "FALSE") << " KERNEL DETECTED " 
-        << (other.is_running? "TRUE" : "FALSE") << " PROMISCUOUS " << (other.promisc_mode? "TRUE" : "FALSE") 
+        << (other.carrier_detected? "TRUE" : "FALSE") << " PROMISCUOUS " << (other.promisc_mode? "TRUE" : "FALSE") 
         << std::endl;
         return os;
     }
