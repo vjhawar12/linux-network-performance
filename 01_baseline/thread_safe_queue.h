@@ -33,13 +33,13 @@ public:
     // return the current size (not capacity) of the queue 
     int get_size() {
         // using acquire so the subtraction does not happen on stale values
-        int _back = back.load(std::memory_order_acquire);
-        int _front = front.load(std::memory_order_acquire);
+        uint16_t _back = back.load(std::memory_order_acquire);
+        uint16_t _front = front.load(std::memory_order_acquire);
         return _back - _front;
     }
 
     // add an element to the back of the queue with rvalue reference, return nullopt if queue full else true.
-    std::optional<bool> add(T&& elem) {
+    bool add(T&& elem) {
         if (!is_full()) {
             // data[] = std::move(elem) depends on loading 'back' so that line couldn't be reordered anyways, so relaxed works
             uint16_t current_back = back.load(std::memory_order_relaxed); 
@@ -48,18 +48,18 @@ public:
             back.fetch_add(1, std::memory_order_release);
             return true;
         }
-        return std::nullopt;
+        return false;
     }
 
     // add an element to the back of the queue with const lvalue reference, return nullopt if queue full else true.
-    std::optional<bool> add(const T& elem) {
+    bool add(const T& elem) {
         if (!is_full()) {
             uint16_t current_back = back.load(std::memory_order_relaxed); 
             data[current_back % capacity] = elem;
             back.fetch_add(1, std::memory_order_release);
             return true;
         }
-        return std::nullopt;
+        return false;
     }
 
     // retrieve the element at the front of the queue by value, return nullopt if queue empty else true.

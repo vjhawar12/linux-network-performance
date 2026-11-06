@@ -82,9 +82,7 @@ void monitor_interfaces() {
     // receiving the raw bytes in buf
     char buf[4096]{};
     while (1) {
-        std::unique_lock<std::mutex> lock(mtx);
-        cv.wait(lock, [] {return !ready;}); 
-        ssize_t bytes_received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT); 
+        ssize_t bytes_received = recv(fd, buf, sizeof(buf), 0); 
         if (bytes_received == 0) continue;
         // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
         nlmsghdr* header = reinterpret_cast<nlmsghdr*>(buf); 
@@ -106,7 +104,10 @@ void monitor_interfaces() {
                 queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PhysicalLinkDetectedEvent, (temp->ifi_flags & IFF_LOWER_UP) != 0)));
                 queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::CarrierDetectedEvent, (temp->ifi_flags & IFF_RUNNING) != 0)));
                 queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PromiscModeDetectedEvent, (temp->ifi_flags & IFF_PROMISC) != 0)));
-                ready = true;
+                {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    ready = true;
+                }
                 cv.notify_one();
                 break;
             case RTM_DELLINK: // called when the interface is disconnecting 
@@ -114,13 +115,15 @@ void monitor_interfaces() {
                 // ifi_index is the same interface index being used in nw_intf_t
                 idx = temp->ifi_index;
                 queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDisconnectedEvent, 1)));
-                ready = true;
+                {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    ready = true;
+                }
                 cv.notify_one();
                 break;
             default:
                 break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 }
 
@@ -144,42 +147,49 @@ void app(void* args) noexcept {
     int ret;
     // responding to real time events
     while (1) {
-        std::unique_lock<std::mutex> lock(mtx);
+        std::unique_lock<std::mutex> lock(mtx); // releases at the end of loop iteration via RAII
         cv.wait(lock, [] {return ready;}); 
         ready = false;
-        auto item = queue.get();
-        if (item == std::nullopt) continue; 
-        int idx = item->first;
-        char buff[IF_NAMESIZE]{};  
-        NetworkEvent event_type = item->second.first;
-        bool event_state = item->second.second;
-        switch (event_type) {
-            case NetworkEvent::InterfaceDiscoveredEvent:
-                if_indextoname(idx, buff); 
-                nw_intf_list[idx] = std::make_unique<nw_intf_t>(std::string(buff), idx); 
-                break;
-            case NetworkEvent::InterfaceDisconnectedEvent:
-                ret = nw_intf_list.erase(idx); 
-                if (ret <= 0) {
-                    std::cerr << "Error during erase!" << std::endl;
-                }
-                break;
-            case NetworkEvent::CarrierDetectedEvent:
-                nw_intf_list[idx]->carrier_detected = event_state;
-                break;
-            case NetworkEvent::SoftwareEnabledEvent:
-                nw_intf_list[idx]->software_enabled = event_state;
-                break;
-            case NetworkEvent::PhysicalLinkDetectedEvent:
-                nw_intf_list[idx]->physical_link_up = event_state;
-                break;
-            case NetworkEvent::PromiscModeDetectedEvent:
-                nw_intf_list[idx]->promisc_mode = event_state; 
-                break;
-            default:
-                break;
+        // fully drain the queue
+        int items = queue.get_size();
+        while (items--) {
+            auto item = queue.get();
+            if (item == std::nullopt) continue; 
+            int idx = item->first;
+            char buff[IF_NAMESIZE]{};  
+            NetworkEvent event_type = item->second.first;
+            bool event_state = item->second.second;
+            switch (event_type) {
+                case NetworkEvent::InterfaceDiscoveredEvent: 
+                    if (nw_intf_list.find(idx) == nw_intf_list.end()) {
+                        if_indextoname(idx, buff);
+                        nw_intf_list[idx] = std::make_unique<nw_intf_t>(std::string(buff), idx);
+                    } 
+                    break;
+                case NetworkEvent::InterfaceDisconnectedEvent:
+                    if (nw_intf_list.find(idx) != nw_intf_list.end()) {
+                        ret = nw_intf_list.erase(idx); 
+                        if (ret <= 0) {
+                            std::cerr << "Error during erase!" << std::endl;
+                        }
+                    }
+                    break;
+                case NetworkEvent::CarrierDetectedEvent:
+                    nw_intf_list[idx]->carrier_detected = event_state;
+                    break;
+                case NetworkEvent::SoftwareEnabledEvent:
+                    nw_intf_list[idx]->software_enabled = event_state;
+                    break;
+                case NetworkEvent::PhysicalLinkDetectedEvent:
+                    nw_intf_list[idx]->physical_link_up = event_state;
+                    break;
+                case NetworkEvent::PromiscModeDetectedEvent:
+                    nw_intf_list[idx]->promisc_mode = event_state; 
+                    break;
+                default:
+                    break;
+            }
         }
         print_interfaces(nw_intf_list); 
-        lock.~unique_lock(); // releasing the mutex via RAII
     } 
 }
