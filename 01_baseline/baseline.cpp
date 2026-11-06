@@ -27,9 +27,12 @@ A5: physical verification on hardware
 #include <utility>
 
 ThreadSafeQueue<std::pair<int, std::pair<NetworkEvent, bool>>, 16> queue;
-std::mutex mtx;
+
+// these objects let thread block (not sleep) until the condition is true based on the predicate ready 
+// and then wake up and acquire the lock. lock guard lets them release mutex automatically 
+// once they're out of scope or dead
 std::condition_variable cv;
-std::unique_lock<std::mutex> lock(mtx);
+std::mutex mtx;
 bool ready;
 
 void discover_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& intf_map) {
@@ -46,9 +49,11 @@ void discover_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& in
             bool promisc_mode = temp->ifa_flags & IFF_PROMISC; 
             int idx = if_nametoindex(name); 
             if (idx == 0) {
-                std::cout << "New interface found: " << idx << std::endl;
-                intf_map[idx] = std::make_unique<nw_intf_t>(std::string(name), software_enabled, physical_link_up, carrier_detected, promisc_mode, idx); 
+                std::string s = "Error during interface discovery: errno = " + std::to_string(errno);
+                throw InterfaceDiscoveryException(s); 
             } 
+            std::cout << "New interface found: " << idx << std::endl;
+            intf_map[idx] = std::make_unique<nw_intf_t>(std::string(name), software_enabled, physical_link_up, carrier_detected, promisc_mode, idx); 
             temp = temp->ifa_next;
         } 
         if (intf_map.size() == 0) {
@@ -69,7 +74,6 @@ void print_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& intf_
 // using netlink rather than raw system calls to virtual files to interface with the linux subsystem and get notified automatically 
 // rather than polling for changes
 void monitor_interfaces() {
-    std::lock_guard<std::mutex> lock(mtx);
     // opening netlink socket to kernel
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     // listen for changes in link status
@@ -78,6 +82,8 @@ void monitor_interfaces() {
     // receiving the raw bytes in buf
     char buf[4096]{};
     while (1) {
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [] {return !ready;}); 
         ssize_t bytes_received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT); 
         if (bytes_received == 0) continue;
         // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
@@ -118,14 +124,13 @@ void monitor_interfaces() {
     }
 }
 
-int app(void* args) noexcept {
+void app(void* args) noexcept {
     (void)args;
     std::unordered_map<int, std::unique_ptr<nw_intf_t>> nw_intf_list; 
     try {
         discover_interfaces(nw_intf_list);
     } catch (const InterfaceDiscoveryException& e) {
-        std::cerr << "Caught: " << e.what() << std::endl;
-        return 1; 
+        std::cerr << "Caught: " << e.what() << std::endl; 
     } catch (const std::exception& e) {
         std::cerr << "Unexpected exception: " << e.what() << std::endl;
     }
@@ -136,15 +141,16 @@ int app(void* args) noexcept {
     // creating thread for get_interface_info
     std::thread interface_monitor(monitor_interfaces);
     interface_monitor.detach();
+    int ret;
     // responding to real time events
     while (1) {
+        std::unique_lock<std::mutex> lock(mtx);
         cv.wait(lock, [] {return ready;}); 
         ready = false;
         auto item = queue.get();
         if (item == std::nullopt) continue; 
         int idx = item->first;
         char buff[IF_NAMESIZE]{};  
-        int ret = 0;
         NetworkEvent event_type = item->second.first;
         bool event_state = item->second.second;
         switch (event_type) {
@@ -154,6 +160,9 @@ int app(void* args) noexcept {
                 break;
             case NetworkEvent::InterfaceDisconnectedEvent:
                 ret = nw_intf_list.erase(idx); 
+                if (ret <= 0) {
+                    std::cerr << "Error during erase!" << std::endl;
+                }
                 break;
             case NetworkEvent::CarrierDetectedEvent:
                 nw_intf_list[idx]->carrier_detected = event_state;
@@ -171,6 +180,6 @@ int app(void* args) noexcept {
                 break;
         }
         print_interfaces(nw_intf_list); 
+        lock.~unique_lock(); // releasing the mutex via RAII
     } 
-    return 0;
 }

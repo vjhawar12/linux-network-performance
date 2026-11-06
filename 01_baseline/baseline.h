@@ -62,6 +62,6 @@ public:
     ~nw_intf_t() = default; 
 }; 
 
-int app(void* args) noexcept;
+void app(void* args) noexcept;
 
 #endif
