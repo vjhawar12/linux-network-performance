@@ -46,11 +46,9 @@ void discover_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& in
             bool promisc_mode = temp->ifa_flags & IFF_PROMISC; 
             int idx = if_nametoindex(name); 
             if (idx == 0) {
-                std::string err = "No interface found: errno = " + std::to_string(errno);
-                throw InterfaceDiscoveryException(err);
-            } else if (intf_map.find(idx) != intf_map.end()) {
+                std::cout << "New interface found: " << idx << std::endl;
                 intf_map[idx] = std::make_unique<nw_intf_t>(std::string(name), software_enabled, physical_link_up, carrier_detected, promisc_mode, idx); 
-            }
+            } 
             temp = temp->ifa_next;
         } 
         if (intf_map.size() == 0) {
@@ -76,48 +74,48 @@ void monitor_interfaces() {
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     // listen for changes in link status
     int optval = RTMGRP_LINK; 
-    setsockopt(fd, SOL_SOCKET, NETLINK_ADD_MEMBERSHIP, &optval, sizeof(int)); 
+    setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &optval, sizeof(int)); 
     // receiving the raw bytes in buf
-    char buf[4096]; 
-    ssize_t bytes_received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT); 
-    // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
-    nlmsghdr* header = reinterpret_cast<nlmsghdr*>(buf); 
-    ifinfomsg* temp = NULL; 
-    bool new_interface_found = false;
-    int idx = -1;
-    // parsing header
-    switch (header->nlmsg_type) {
-        case NLMSG_DONE:
-            break;
-        case NLMSG_ERROR:
-            break;
-        case RTM_NEWLINK:
-            temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
-            // ifi_index is the same interface index being used in nw_intf_t
-            idx = temp->ifi_index;
-            char* buff;
-            if_indextoname(idx, buff);
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDiscoveredEvent, 1)));
-            // update state based on flags
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::SoftwareEnabledEvent, (temp->ifi_flags & IFF_UP) != 0)));
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PhysicalLinkDetectedEvent, (temp->ifi_flags & IFF_LOWER_UP) != 0)));
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::CarrierDetectedEvent, (temp->ifi_flags & IFF_RUNNING) != 0)));
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PromiscModeDetectedEvent, (temp->ifi_flags & IFF_PROMISC) != 0)));
-            ready = true;
-            cv.notify_one();
-            break;
-        case RTM_DELLINK: // called when the interface is disconnecting 
-            temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
-            // ifi_index is the same interface index being used in nw_intf_t
-            idx = temp->ifi_index;
-            queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDisconnectedEvent, 1)));
-            ready = true;
-            cv.notify_one();
-            break;
-        default:
-            break;
+    char buf[4096]{};
+    while (1) {
+        ssize_t bytes_received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT); 
+        if (bytes_received == 0) continue;
+        // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
+        nlmsghdr* header = reinterpret_cast<nlmsghdr*>(buf); 
+        ifinfomsg* temp = NULL; 
+        int idx = -1;
+        // parsing header
+        switch (header->nlmsg_type) {
+            case NLMSG_DONE:
+                break;
+            case NLMSG_ERROR:
+                break;
+            case RTM_NEWLINK:
+                temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
+                // ifi_index is the same interface index being used in nw_intf_t
+                idx = temp->ifi_index;
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDiscoveredEvent, 1)));
+                // update state based on flags
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::SoftwareEnabledEvent, (temp->ifi_flags & IFF_UP) != 0)));
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PhysicalLinkDetectedEvent, (temp->ifi_flags & IFF_LOWER_UP) != 0)));
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::CarrierDetectedEvent, (temp->ifi_flags & IFF_RUNNING) != 0)));
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::PromiscModeDetectedEvent, (temp->ifi_flags & IFF_PROMISC) != 0)));
+                ready = true;
+                cv.notify_one();
+                break;
+            case RTM_DELLINK: // called when the interface is disconnecting 
+                temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
+                // ifi_index is the same interface index being used in nw_intf_t
+                idx = temp->ifi_index;
+                queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDisconnectedEvent, 1)));
+                ready = true;
+                cv.notify_one();
+                break;
+            default:
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
 }
 
 int app(void* args) noexcept {
@@ -145,7 +143,7 @@ int app(void* args) noexcept {
         auto item = queue.get();
         if (item == std::nullopt) continue; 
         int idx = item->first;
-        char* buff = NULL;
+        char buff[IF_NAMESIZE]{};  
         int ret = 0;
         NetworkEvent event_type = item->second.first;
         bool event_state = item->second.second;

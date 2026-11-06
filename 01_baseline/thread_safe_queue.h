@@ -7,12 +7,13 @@
 #include <optional>
 
 template <typename T, uint16_t capacity>
+// Note: Currently thread safe only for single producer/consumer, not yet for multi producer and multi consumer
 class ThreadSafeQueue {
 private:
     std::array<T, capacity> data{};
     std::atomic<uint16_t> front = 0;
-    std::atomic<uint16_t> size = 0; 
-    std::atomic<uint16_t> remaining = 0;
+    std::atomic<uint16_t> back = 0;
+
 public:
     ThreadSafeQueue() = default;
     // copy constructor
@@ -24,41 +25,47 @@ public:
     // move assignment operator 
     ThreadSafeQueue& operator= (ThreadSafeQueue&& other) = default; 
     ~ThreadSafeQueue() = default; 
+    
+    int get_size() {
+        int _back = back.load(std::memory_order_acquire);
+        int _front = front.load(std::memory_order_acquire);
+        return _back - _front;
+    }
 
     void add(T&& elem) {
-        if (size < capacity - 1) {
-            data[size] = elem;
-            size.fetch_add(1, std::memory_order_acquire);
-            // size++ cannot move above this line
-            size++;
-            remaining++;
+        if (!is_full()) {
+            uint16_t current_back = back.load(std::memory_order_relaxed); 
+            data[current_back % capacity] = std::move(elem);
+            back.fetch_add(1, std::memory_order_release);
         }
     }
 
     void add(const T& elem) {
-        if (size < capacity - 1) {
-            data[size] = elem;
-            size.fetch_add(1, std::memory_order_acquire);
-            // size++ cannot move above this line
-            size++;
-            remaining++;
+        if (!is_full()) {
+            uint16_t current_back = back.load(std::memory_order_relaxed); 
+            data[current_back % capacity] = elem;
+            back.fetch_add(1, std::memory_order_release);
         }
     }
 
     std::optional<T> get() {
-        if (remaining > 0 && front < size - 1) {
-            T temp = data[front];
-            // size++ cannot move below this line
-            size.fetch_add(1, std::memory_order_release);
-            front++;
-            remaining--;
+        // retrieve the element at the front of the queue
+        // increment the front 
+        if (!is_empty()) {
+            uint16_t current_front = front.load(std::memory_order_relaxed); 
+            T temp = std::move(data[current_front % capacity]);
+            front.fetch_add(1, std::memory_order_release);
             return temp;
         }
         return std::nullopt;
     }
 
     bool is_empty() {
-        return remaining == 0;
+        return get_size() == 0;
+    }
+
+    bool is_full() {
+        return get_size() == capacity; 
     }
 };
 
