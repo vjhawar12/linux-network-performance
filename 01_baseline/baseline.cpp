@@ -11,7 +11,6 @@ A5: physical verification on hardware
 
 #include "baseline.h"
 #include "thread_safe_queue.h"
-#include <chrono>
 #include <condition_variable>
 #include <ifaddrs.h>
 #include <mutex>
@@ -76,18 +75,27 @@ void print_interfaces(std::unordered_map<int, std::unique_ptr<nw_intf_t>>& intf_
 void monitor_interfaces() {
     // opening netlink socket to kernellen
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (fd == -1) {
+        std::string s = "Unable to open socket: errno = " + std::to_string(errno);
+        throw InterfaceManageException(s); 
+    }
     // listen for changes in link status
     int optval = RTMGRP_LINK; 
-    setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &optval, sizeof(int)); 
+    int ret = setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &optval, sizeof(int)); 
+    if (ret == -1) {
+        std::string s = "setsockopt failed: errno = " + std::to_string(errno);
+        throw InterfaceManageException(s); 
+    }
     // receiving the raw bytes in buflen
     alignas(8) nlmsghdr buf[8192/sizeof(struct nlmsghdr)];
     while (1) {
         ssize_t len = recv(fd, buf, sizeof(buf), 0); 
+        if (len == -1) {
+            std::string s = "Error during recv: errno = " + std::to_string(errno); 
+            throw InterfaceManageException(s);
+        }
         if (len == 0) continue;
-        // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
-        nlmsghdr* header = (nlmsghdr*)buf;
-        do {
-            header = NLMSG_NEXT(header, len); 
+        for (nlmsghdr* header = (nlmsghdr*)buf; NLMSG_OK(header,len); header = NLMSG_NEXT(header, len))  {
             ifinfomsg* temp = NULL; 
             int idx = -1;
             // parsing header
@@ -113,7 +121,7 @@ void monitor_interfaces() {
                     cv.notify_one();
                     break;
                 case RTM_DELLINK: // called when the interface is disconnecting 
-                    temp = reinterpret_cast<ifinfomsg*>(buf + sizeof(nlmsghdr)); 
+                    temp = reinterpret_cast<ifinfomsg*>(NLMSG_DATA(header)); 
                     // ifi_index is the same interface index being used in nw_intf_t
                     idx = temp->ifi_index;
                     queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDisconnectedEvent, 1)));
@@ -126,7 +134,7 @@ void monitor_interfaces() {
                 default:
                     break;
             }
-        } while (NLMSG_OK(header, len)); 
+        } 
     }
 }
 
