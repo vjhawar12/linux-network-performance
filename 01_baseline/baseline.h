@@ -1,11 +1,16 @@
 #ifndef BASELINE_H
 #define BASELINE_H
 
+#include <stdexcept>
 #include <string>
 #include <iostream>
 #include <stdint.h>
 
 class InterfaceDiscoveryException : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+}; 
+
+class InterfaceManageException : public std::runtime_error {
     using std::runtime_error::runtime_error;
 }; 
 
