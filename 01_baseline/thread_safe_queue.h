@@ -31,7 +31,7 @@ public:
     ~ThreadSafeQueue() = default; 
     
     // return the current size (not capacity) of the queue 
-    int get_size() {
+    uint16_t get_size() {
         // using acquire so the subtraction does not happen on stale values
         uint16_t _back = back.load(std::memory_order_acquire);
         uint16_t _front = front.load(std::memory_order_acquire);
