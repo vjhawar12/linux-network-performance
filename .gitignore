@@ -30,3 +30,7 @@ perf.data*
 
 # CMake build outputs
 /build/
+
+# my notes
+
+notes.txt
