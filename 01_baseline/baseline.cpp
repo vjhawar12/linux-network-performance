@@ -80,13 +80,13 @@ void monitor_interfaces() {
     int optval = RTMGRP_LINK; 
     setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &optval, sizeof(int)); 
     // receiving the raw bytes in buflen
-    alignas(8) msghdr* buf{};
+    alignas(8) nlmsghdr buf[8192/sizeof(struct nlmsghdr)];
     while (1) {
-        ssize_t len = recvmsg(fd, buf, 0); 
+        ssize_t len = recv(fd, buf, sizeof(buf), 0); 
         if (len == 0) continue;
         // casting bytes with reinterpret_cast to nlmsghdr to interpret them 
-        nlmsghdr* header = nullptr;
-        while (NLMSG_OK(header, len)) {
+        nlmsghdr* header = (nlmsghdr*)buf;
+        do {
             header = NLMSG_NEXT(header, len); 
             ifinfomsg* temp = NULL; 
             int idx = -1;
@@ -97,7 +97,7 @@ void monitor_interfaces() {
                 case NLMSG_ERROR:
                     break;
                 case RTM_NEWLINK:
-                    temp = reinterpret_cast<ifinfomsg*>(buf + NLMSG_SPACE(len)); 
+                    temp = reinterpret_cast<ifinfomsg*>(NLMSG_DATA(header)); 
                     // ifi_index is the same interface index being used in nw_intf_t
                     idx = temp->ifi_index;
                     queue.add(std::make_pair(idx, std::make_pair(NetworkEvent::InterfaceDiscoveredEvent, 1)));
@@ -126,7 +126,7 @@ void monitor_interfaces() {
                 default:
                     break;
             }
-        } 
+        } while (NLMSG_OK(header, len)); 
     }
 }
 
