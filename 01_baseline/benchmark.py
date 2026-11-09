@@ -9,6 +9,7 @@ from pyroute2 import NetNS, IPRoute
 from pyroute2.netns import create as ns_create
 import threading
 
+
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
 and inspecting packet drop statistics for Layer 2. The machine has 2 NICs which are being used as interface 1 and 2. 
@@ -17,101 +18,181 @@ iperf3 operates at Layer 4 and generates UDP/TCP packets to verify if each packe
 Layer 2 packet drop statistics need to be examined by reading virtual files on the linux machine. 
 Both interfaces need to be assigned ip addresses with one designated as 'client' / 'tx' and the other 'server' / 'rx'
 The linux kernel routes packets going from one interface to another on the same machine internally not neccessarily 
-over the switch as we intend to. Using network namespaces isolates interfaces to get around that.
+over the switch as we intend to. Using network namespaces isolates interfaces to get around that by creating 
+a virtual networking stack so that the routing table doesn't think the rx interface is on the same machine as the 
+tx interface and so the kernel doesn't use the loopback interface to route the packets between tx and rx interfaces
 """
 
-parser = argparse.ArgumentParser()
-parser.add_argument("tx_interface")
-parser.add_argument("rx_interface")
-parser.add_argument("--rx-ip", default="172.31.250.2")
-parser.add_argument("--tx-ip", default="172.31.250.1")
-parser.add_argument("--rx-namespace", default="rxbench")
-parser.add_argument("--bitrate", default="1G")
-parser.add_argument("--duration", type=int, default=10)
+class NetworkInterfaceException(Exception):
+    pass
 
-args = parser.parse_args()
-tx_interface = args.tx_interface
-rx_interface = args.rx_interface
-rx_ip = args.rx_ip
-tx_ip = args.tx_ip
-rx_namespace = args.rx_namespace
-bitrate = args.bitrate
-duration = args.duration
+class NetworkInterface:
+    STAT_NAMES = {
+        "TX": (
+            "tx_packets",
+            "tx_bytes",
+            "tx_dropped",
+            "tx_errors",
+        ),
+        "RX" : (
+            "rx_packets",
+            "rx_bytes",
+            "rx_dropped",
+            "rx_errors",
+            "rx_crc_errors",
+            "rx_missed_errors",
+        )
+    }
+    threads = []
+    # default namespace is indicated by passing namespace_str = None
+    def __init__(self, intf_name, ip, namespace_str, stat_list):
+        self.intf_name = intf_name
+        self.ip = ip
+        self.namespace_str = namespace_str   
+        self.telemetry = dict()
+        self.stop_collection = threading.Event()
+        self.stop_monitoring = threading.Event()
+        self.snapshot_lock = threading.Lock()
+        self.last_time_link_checked = 0
+        self.intf_idx = None
+        self.mac_address = None
+        self.driver_name = None
+        self.is_up = None
+        self.speed = None
+        stat_list = set(stat_list)
+        for item in stat_list:
+            if not isinstance(item, str):
+                raise NetworkInterfaceException(f"Invalid Key '{item}' for telemetry dict!") 
+            self.telemetry[item] = 0
+        # adding the interface to the network namespace if its a custom namespace
+        if self.namespace_str is not None:
+            # creating the network namespace if a custom namespace is specified
+            ns_create(self.namespace_str)         
+            with IPRoute() as ipr:
+                # converting names of interfaces into numeric ids
+                indices = ipr.link_lookup(ifname=self.intf_name)
+                if not indices:
+                    raise NetworkInterfaceException(f"Interface '{self.intf_name}' not found at startup.")
+                self.intf_idx = indices[0]     
+                # adding the interface to the network namespace if its a custom namespace
+                ipr.link("set", index=self.intf_idx, net_ns_fd=self.namespace_str)
+        with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:    
+            # converting names of interfaces into numeric ids
+            indices = ipr.link_lookup(ifname=self.intf_name)
+            if not indices:
+                raise NetworkInterfaceException(f"Interface '{self.intf_name}' not found at startup.")
+            self.intf_idx = indices[0]     
+            # assign the static IP
+            ipr.addr("add", index=self.intf_idx, address=self.ip, prefixlen=24)
+            # bring the interface up
+            ipr.link("set", index=self.intf_idx, state="up")
+        addrs = psutil.net_if_addrs().get(self.intf_name)
+        for addr in addrs:
+            if addr is not None and addr.family.name == "AF_LINK":
+                self.mac_address = addr.address
+        if self.mac_address is None:
+            raise NetworkInterfaceException(f"Could not find MAC address for interface '{self.intf_name}' number {self.intf_idx}")
+        # scrape /sys/class/net for virtual files about each interface
+        driver_dir = Path("/sys/class/net") / self.intf_name / "device" / "driver"
+        actual_path = os.path.realpath(driver_dir)
+        # printing out driver and mac address per interface
+        self.driver_name = os.path.basename(actual_path)
+        NetworkInterface.threads.append(threading.Thread(target=self))
+                
+    # returns the interface index and the namespace in which its defined
+    def get_intf_index(self):
+        return (self.namespace_str, self.intf_idx)
 
-threads = []
-stop_collection = threading.Event()
-snapshot_lock = threading.Lock()
+    @staticmethod
+    def elapsed_ms(last_time, duration_ms):
+        return ((1000 * time.perf_counter()) - last_time > (1000 * duration_ms))
 
-STAT_NAMES = {
-    "TX": (
-        "tx_packets",
-        "tx_bytes",
-        "tx_dropped",
-        "tx_errors",
-    ),
-    "RX" : (
-        "rx_packets",
-        "rx_bytes",
-        "rx_dropped",
-        "rx_errors",
-        "rx_crc_errors",
-        "rx_missed_errors",
-    )
-}
+    def __call__(self):
+        with IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute() as ipr:
+            while not self.stop_monitoring.is_set() or not self.stop_collection.is_set():  
+                if not self.stop_monitoring.is_set() and NetworkInterface.elapsed_ms(self.last_time_link_checked, 200): 
+                    print("Checking link status: ")
+                    self.last_time_link_checked = time.perf_counter() * 1000
+                    self._update()
+                if not self.stop_collection.is_set():
+                    print("Checking packet drop statistics:")
+                    self._collect(ipr)
+                time.sleep(0.01)
 
-realtime_telem = {
-    "RX" : {},
-    "TX" : {}
-}
+    @staticmethod
+    def discover_interfaces(wired_prefixes=('eth', 'en', 'em', 'br', 'lan'), wireless_prefixes=('wlan', 'wlp', 'wifi', 'wlan')):
+        # Get all network interface addresses using psutil which tracks processes including network processes
+        interfaces = psutil.net_if_addrs()
+        # casting to set for unique values only
+        wired_prefixes = tuple(set(wired_prefixes))
+        wireless_prefixes = tuple(set(wireless_prefixes))
+        # Filter for interfaces that match wired prefixes and ignore wireless/loopback
+        wired_interfaces = {
+            name: addrs 
+            for name, addrs in interfaces.items()
+            if name.lower().startswith(wired_prefixes) 
+            and not name.lower().startswith(wireless_prefixes)
+            and name != 'lo'
+        }
+        print("Available Network Interfaces:\n")
+        for intf_name, addresses in wired_interfaces.items():
+            print(f"Interface: {intf_name}")
 
-def setup_network(rx_itf_idx, tx_itf_idx):
-    global rx_ip, tx_ip
-    ns_create(rx_namespace)
-    with IPRoute() as ipr:
-        # add the rx interface to the rx namespace
-        ipr.link("set", index=rx_itf_idx, net_ns_fd=rx_namespace)
-        # assign the static IP for rx and tx    
-        ipr.addr("add", index=rx_itf_idx, address=rx_ip, prefixlen=24)
-        ipr.addr("add", index=tx_itf_idx, address=tx_ip, prefixlen=24)
-        # bring the interface up
-        ipr.link("set", index=rx_itf_idx, state="up")
+    # call this regularly preferably in its own thread to track physical link state, speed, etc 
+    def _update(self):
+        # Check if the interface is active/running
+        stats = psutil.net_if_stats()
+        if self.intf_name in stats:
+            # printing out link status per interface
+            self.is_up = stats[self.intf_name].isup
+            self.speed = stats[self.intf_name].speed
+            return (self.is_up, self.speed)
 
+    # call this regularly preferably in its own thread to track packet drop and errors
+    # inspect statistics like packet drop and throughput for a network interface 
+    # for interfaces within the default namespace reading the contents of the virtual file 
+    # /sys/class/net/<interface>/statistics is fine, but interfaces in alternate namespaces wouldn't show up there
+    # so this function uses pyroute2/netlink to fetch those same statistics, 
+    # but not by reading a virtual file directly 
+    def _collect(self, ipr):
+        if ipr is None:
+            raise NetworkInterfaceException("No instance of IPRoute passed!")
+        # Request specific link info including binary attributes
+        link_data = ipr.get_links(self.intf_idx)[0]
+        # Convert attributes tuple list into a workable dictionary
+        attrs = dict(link_data['attrs'])        
+        # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
+        stats = attrs.get('IFLA_STATS64')
+        with self.snapshot_lock:
+            for stat in stats.keys():
+                if stat in self.telemetry:
+                    self.telemetry[stat] = (time.time(), stats.get(stat, 0))
 
-def get_interface_index(name, namespace=None):
-    with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
-        indices = ipr.link_lookup(ifname=name)
-        if not indices:
-            raise ValueError(f"Interface '{name}' not found at startup.")
-        return indices[0]
+    @staticmethod
+    # call this only once all the instances of NetworkInterface have been added
+    def start():
+        for thread in NetworkInterface.threads:
+            thread.start()
 
-# inspect statistics like packet drop and throughput for a network interface 
-# for interfaces within the default namespace reading the contents of the virtual file 
-# /sys/class/net/<interface>/statistics is fine, but interfaces in alternate namespaces wouldn't show up there
-# so this function uses pyroute2/netlink to fetch those same statistics, 
-# but not by reading a virtual file directly 
-def get_nic_stats(itf_idx, is_rx, namespace=None):
-    global realtime_telem, stop_collection, snapshot_lock
-    direction = "RX" if is_rx else "TX"
-    with IPRoute(netns=namespace) if namespace else IPRoute() as ipr:
-        while not stop_collection.is_set():
-            # Request specific link info including binary attributes
-            link_data = ipr.get_links(itf_idx)[0]
-            # Convert attributes tuple list into a workable dictionary
-            attrs = dict(link_data['attrs'])        
-            # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
-            stats = attrs.get('IFLA_STATS64')
-            with snapshot_lock:
-                for stat in stats.keys():
-                    if stat in STAT_NAMES[direction]:
-                        realtime_telem[direction][stat] = (time.time(), stats.get(stat, 0)) 
-            time.sleep(0.1)
+    @staticmethod
+    # call this at the end of the program
+    def join():
+        for thread in NetworkInterface.threads:
+            thread.join()        
 
-def get_nic_stats_snapshot(is_rx):
-    global realtime_telem, snapshot_lock
-    with snapshot_lock:
-        return realtime_telem["RX" if is_rx else "TX"].copy()
+    def snapshot(self):
+        with self.snapshot_lock:
+            return self.telemetry.copy()
+           
+    def __str__(self):
+        s1 = f"Status: {'UP' if self.is_up else 'DOWN'}"
+        s2 = f"Speed: {self.speed} Mb/s"
+        s3 = f"Driver: {self.driver_name}"
+        s4 = f"MAC: {self.mac_address}"
+        s5 = self.telemetry.__str__()
+        return s1 + s2 + s3 + s4 + s5
        
-def generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration):
+def generate_traffic(rx, tx, bitrate, duration):
     # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
     print(f"Saturating link to {rx_ip} via {tx_intf}...")
     cmd = ["iperf3", "-c", rx_ip, "-B", tx_ip, "--bind-dev", tx_intf, "-u", "-b", bitrate, "-t", str(duration), "-J"]
@@ -127,60 +208,20 @@ def generate_traffic(rx_ip, tx_ip, tx_intf, bitrate, duration):
         raise RuntimeError(report["error"])
     return summary
 
-def scan_interfaces():
-    # Get all network interface addresses
-    interfaces = psutil.net_if_addrs()
-    # Define common prefixes for wired and wireless interfaces
-    wired_prefixes = ('eth', 'en', 'em', 'br', 'lan')
-    wireless_prefixes = ('wlan', 'wlp', 'wifi', 'wlan')
-    # Filter for interfaces that match wired prefixes and ignore wireless/loopback
-    wired_interfaces = {
-        name: addrs 
-        for name, addrs in interfaces.items()
-        if name.lower().startswith(wired_prefixes) 
-        and not name.lower().startswith(wireless_prefixes)
-        and name != 'lo'
-    }
-    print("Available Network Interfaces:\n")
-    for intf_name, addresses in wired_interfaces.items():
-        print(f"Interface: {intf_name}")
-    
-def get_intf_info(intf_name):
-    # Check if the interface is active/running
-    stats = psutil.net_if_stats()
-    interfaces = psutil.net_if_addrs()
-    addresses = interfaces[intf_name]
-    if intf_name in stats:
-        is_up = stats[intf_name].isup
-        print(f"  Status: {'UP' if is_up else 'DOWN'}")
-        print(f"  Speed: {stats[intf_name].speed}Mb/s")
-        driver_dir = Path("/sys/class/net") / intf_name / "device" / "driver"
-        actual_path = os.path.realpath(driver_dir)
-        # os.path.basename grabs just the trailing folder name
-        driver_name = os.path.basename(actual_path)
-        print(f"Driver: {driver_name}")
-        for address in addresses:
-            # psutil.AF_LINK represents the MAC address family
-            if address.family == psutil.AF_LINK:
-                print(f"MAC: {address.address}")
-
-def calculate_deltas(initial, final):
-    delta = {}
-    for key in initial:
-        delta[key] = final[key][1] - initial[key][1]
-    return delta
-
-def run_test(rx_intf_idx, tx_intf_idx):
-    global stop_collection, tx_interface, threads
+def run_test(rx, tx, bitrate, duration):
+    def calculate_deltas(initial, final):
+        delta = {}
+        for key in initial:
+            delta[key] = final[key][1] - initial[key][1]
+        return delta
     # 1. Snapshot L2 stats before the stress test
     ms_start = int(time.time() * 1000)
-    initial_l2_rx = get_nic_stats_snapshot(True)
-    initial_l2_tx = get_nic_stats_snapshot(False)
+    initial_l2_rx = rx.snapshot()
+    initial_l2_tx = tx.snapshot()
     # 2. generate traffic
-    summary = generate_traffic(rx_ip, tx_ip, tx_interface, bitrate, duration)
-    stop_collection.set()
-    for thread in threads:
-        thread.join()
+    summary = generate_traffic(rx, tx, bitrate, duration)
+    rx.stop_collection.set()
+    tx.stop_monitoring.set()
     # 3. Snapshot L2 stats immediately after the test
     final_l2_rx = get_nic_stats_snapshot(True)
     final_l2_tx = get_nic_stats_snapshot(False)
@@ -205,24 +246,38 @@ def run_test(rx_intf_idx, tx_intf_idx):
     print(f"Loss percent: {summary["lost_percent"]}")
     print(f"Jitter ms: {summary["jitter_ms"]}")
 
-
-def launch_server():
+def app(args):
+    # print out all the interfaces found on the machine
+    NetworkInterface.discover_interfaces()
+    # create the tx and rx interfaces from command line arguments
+    tx = NetworkInterface(args.tx_interface, args.tx_ip, namespace=None, NetworkInterface.STAT_NAMES["TX"])
+    rx = NetworkInterface(args.rx_interface, args.rx_ip, namespace=args.rx_namespace, NetworkInterface.STAT_NAMES["RX"])
+    # using iperf3 to have the server that tracks the packets the client sent and checks how many actually made it to server
+    # runs the command in the rxbench namespace specifically
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
-    cmd = ["ip", "netns", "exec", rx_namespace, "iperf3", "-s", "-1", "-B", rx_ip]
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    
+    cmd = subprocess.Popen([
+        "ip", "netns", "exec", rx_namespace, 
+        "iperf3", "-s", "-1", "-B", rx_ip
+        ], 
+        stdout=subprocess.DEVNULL, 
+        stderr=subprocess.PIPE, 
+        text=True
+    )
+    # running the iperf3 test to measure packet drop
+    run_test(rx, tx, args.bitrate, args.duration)
+
 if __name__ == "__main__":
-    scan_interfaces()
-    get_intf_info(rx_interface)
-    get_intf_info(tx_interface)
-    rx_itf_idx = get_interface_index(rx_interface, rx_namespace)
-    tx_itf_idx = get_interface_index(tx_interface)
-    create_rx_namespace(rx_itf_idx)
-    threads = [
-        threading.Thread(target=get_nic_stats, args=(rx_itf_idx, True, rx_namespace)),
-        threading.Thread(target=get_nic_stats, args=(tx_itf_idx, False))
-    ]
-    for thread in threads:
-        thread.start()
-    launch_server()
-    run_test(rx_itf_idx, tx_itf_idx)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("tx_interface")
+    parser.add_argument("rx_interface")
+    parser.add_argument("--rx-ip", default="172.31.250.2")
+    parser.add_argument("--tx-ip", default="172.31.250.1")
+    parser.add_argument("--rx-namespace", default="rxbench")
+    parser.add_argument("--bitrate", default="1G")
+    parser.add_argument("--duration", type=int, default=10)
+    args = parser.parse_args()
+    # calling start to launch the per-interface threads
+    NetworkInterface.start()
+    app(args)
+    # calling join at the end of the program for cleanup
+    NetworkInterface.join()
