@@ -7,8 +7,8 @@ import json
 import time
 from pyroute2 import NetNS, IPRoute
 from pyroute2.netns import create as ns_create
+from pyroute2.ethtool import Ethtool
 import threading
-
 
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
@@ -51,14 +51,17 @@ class NetworkInterface:
         self.namespace_str = namespace_str   
         self.telemetry = dict()
         self.stop_collection = threading.Event()
-        self.stop_monitoring = threading.Event()
         self.snapshot_lock = threading.Lock()
         self.last_time_link_checked = 0
         self.intf_idx = None
         self.mac_address = None
         self.driver_name = None
-        self.is_up = None
-        self.speed = None
+        self.link = {
+            "up" : None,
+            "speed" : None,
+            "duplex" : None,
+            "autoneg" : None,
+        }
         stat_list = set(stat_list)
         for item in stat_list:
             if not isinstance(item, str):
@@ -109,16 +112,11 @@ class NetworkInterface:
 
     def __call__(self):
         with IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute() as ipr:
-            while not self.stop_monitoring.is_set() or not self.stop_collection.is_set():  
-                if not self.stop_monitoring.is_set() and NetworkInterface.elapsed_ms(self.last_time_link_checked, 200): 
-                    print("Checking link status: ")
-                    self.last_time_link_checked = time.perf_counter() * 1000
-                    self._update()
-                if not self.stop_collection.is_set():
-                    print("Checking packet drop statistics:")
-                    self._collect(ipr)
+            while not self.stop_collection.is_set():  
+                print("Checking packet drop statistics:")
+                self._collect(ipr)
                 time.sleep(0.01)
-
+                
     @staticmethod
     def discover_interfaces(wired_prefixes=('eth', 'en', 'em', 'br', 'lan'), wireless_prefixes=('wlan', 'wlp', 'wifi', 'wlan')):
         # Get all network interface addresses using psutil which tracks processes including network processes
@@ -138,15 +136,6 @@ class NetworkInterface:
         for intf_name, addresses in wired_interfaces.items():
             print(f"Interface: {intf_name}")
 
-    # call this regularly preferably in its own thread to track physical link state, speed, etc 
-    def _update(self):
-        # Check if the interface is active/running
-        stats = psutil.net_if_stats()
-        if self.intf_name in stats:
-            # printing out link status per interface
-            self.is_up = stats[self.intf_name].isup
-            self.speed = stats[self.intf_name].speed
-            return (self.is_up, self.speed)
 
     # call this regularly preferably in its own thread to track packet drop and errors
     # inspect statistics like packet drop and throughput for a network interface 
@@ -166,7 +155,16 @@ class NetworkInterface:
         with self.snapshot_lock:
             for stat in stats.keys():
                 if stat in self.telemetry:
-                    self.telemetry[stat] = (time.time(), stats.get(stat, 0))
+                    self.telemetry[stat] = (time.time(), stats.get(stat, 0))        
+        if elapsed_ms(self.last_time_link_checked, 200):
+            ethtool = Ethtool()
+            self.last_time_link_checked = 1000 * time.perf_counter()
+            link_status = attrs.get('IFLA_OPERSTATE')
+            self.link["up"] = link_status
+            link = ethtool.get_link_mode(self.intf_name)
+            self.link["speed"] = link.speed
+            self.link["duplex"] = link.duplex
+            self.link["autoneg"] = link.autoneg
 
     @staticmethod
     # call this only once all the instances of NetworkInterface have been added
@@ -185,10 +183,10 @@ class NetworkInterface:
             return self.telemetry.copy()
            
     def __str__(self):
-        s1 = f"Status: {'UP' if self.is_up else 'DOWN'}"
-        s2 = f"Speed: {self.speed} Mb/s"
-        s3 = f"Driver: {self.driver_name}"
-        s4 = f"MAC: {self.mac_address}"
+        s1 = f"Status: {self.link['up']}"
+        s2 = f" Speed: {self.link['speed']} Mb/s"
+        s3 = f" Driver: {self.driver_name}"
+        s4 = f" MAC: {self.mac_address}"
         s5 = self.telemetry.__str__()
         return s1 + s2 + s3 + s4 + s5
        
