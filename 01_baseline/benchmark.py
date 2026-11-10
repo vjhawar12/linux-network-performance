@@ -5,8 +5,9 @@ import os
 import argparse
 import json
 import time
-from pyroute2 import NetNS, IPRoute
+from pyroute2 import IPRoute
 from pyroute2.netns import create as ns_create
+from pyroute2.netns import setns as ns_setns
 from pyroute2.ethtool import Ethtool
 import threading
 
@@ -108,10 +109,15 @@ class NetworkInterface:
 
     @staticmethod
     def elapsed_ms(last_time, duration_ms):
-        return ((1000 * time.perf_counter()) - last_time > (1000 * duration_ms))
+        return ((1000 * time.perf_counter()) - last_time) > duration_ms
 
     def __call__(self):
-        with IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute() as ipr:
+        # performs the system call netns which shifts the entire os namespace 
+        # and invalidates ipr if called within the context manager
+        if self.namespace_str is not None:
+            ns_setns(self.namespace_str) 
+        self.ethtool = Ethtool()
+        with IPRoute() as ipr:
             while not self.stop_collection.is_set():  
                 print("Checking packet drop statistics:")
                 self._collect(ipr)
@@ -149,19 +155,18 @@ class NetworkInterface:
         # Request specific link info including binary attributes
         link_data = ipr.get_links(self.intf_idx)[0]
         # Convert attributes tuple list into a workable dictionary
-        attrs = dict(link_data['attrs'])        
+        attrs = link_data['attrs']        
         # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
         stats = attrs.get('IFLA_STATS64')
         with self.snapshot_lock:
             for stat in stats.keys():
                 if stat in self.telemetry:
                     self.telemetry[stat] = (time.time(), stats.get(stat, 0))        
-        if elapsed_ms(self.last_time_link_checked, 200):
-            ethtool = Ethtool()
+        if NetworkInterface.elapsed_ms(self.last_time_link_checked, 200):
             self.last_time_link_checked = 1000 * time.perf_counter()
             link_status = attrs.get('IFLA_OPERSTATE')
             self.link["up"] = link_status
-            link = ethtool.get_link_mode(self.intf_name)
+            link = self.ethtool.get_link_mode(self.intf_name)
             self.link["speed"] = link.speed
             self.link["duplex"] = link.duplex
             self.link["autoneg"] = link.autoneg
@@ -187,13 +192,13 @@ class NetworkInterface:
         s2 = f" Speed: {self.link['speed']} Mb/s"
         s3 = f" Driver: {self.driver_name}"
         s4 = f" MAC: {self.mac_address}"
-        s5 = self.telemetry.__str__()
+        s5 = str(self.telemetry)
         return s1 + s2 + s3 + s4 + s5
        
 def generate_traffic(rx, tx, bitrate, duration):
     # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
-    print(f"Saturating link to {rx_ip} via {tx_intf}...")
-    cmd = ["iperf3", "-c", rx_ip, "-B", tx_ip, "--bind-dev", tx_intf, "-u", "-b", bitrate, "-t", str(duration), "-J"]
+    print(f"Saturating link to {rx.ip} via {tx.intf_name}...")
+    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     report = json.loads(result.stdout)
     summary = report["end"]["sum"]
@@ -219,10 +224,10 @@ def run_test(rx, tx, bitrate, duration):
     # 2. generate traffic
     summary = generate_traffic(rx, tx, bitrate, duration)
     rx.stop_collection.set()
-    tx.stop_monitoring.set()
+    tx.stop_collection.set()
     # 3. Snapshot L2 stats immediately after the test
-    final_l2_rx = get_nic_stats_snapshot(True)
-    final_l2_tx = get_nic_stats_snapshot(False)
+    final_l2_rx = rx.snapshot()
+    final_l2_tx = tx.snapshot()
     ms_end = int(time.time() * 1000)
     # 4. Calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
@@ -248,14 +253,16 @@ def app(args):
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
     # create the tx and rx interfaces from command line arguments
-    tx = NetworkInterface(args.tx_interface, args.tx_ip, namespace=None, NetworkInterface.STAT_NAMES["TX"])
-    rx = NetworkInterface(args.rx_interface, args.rx_ip, namespace=args.rx_namespace, NetworkInterface.STAT_NAMES["RX"])
+    tx = NetworkInterface(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"])
+    rx = NetworkInterface(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"])
+    # calling start to launch the per-interface threads
+    NetworkInterface.start()
     # using iperf3 to have the server that tracks the packets the client sent and checks how many actually made it to server
     # runs the command in the rxbench namespace specifically
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
     cmd = subprocess.Popen([
-        "ip", "netns", "exec", rx_namespace, 
-        "iperf3", "-s", "-1", "-B", rx_ip
+        "ip", "netns", "exec", rx.namespace_str, 
+        "iperf3", "-s", "-1", "-B", rx.ip
         ], 
         stdout=subprocess.DEVNULL, 
         stderr=subprocess.PIPE, 
@@ -274,8 +281,6 @@ if __name__ == "__main__":
     parser.add_argument("--bitrate", default="1G")
     parser.add_argument("--duration", type=int, default=10)
     args = parser.parse_args()
-    # calling start to launch the per-interface threads
-    NetworkInterface.start()
     app(args)
     # calling join at the end of the program for cleanup
     NetworkInterface.join()
