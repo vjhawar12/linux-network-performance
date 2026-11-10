@@ -7,9 +7,11 @@ import json
 import time
 from pyroute2 import IPRoute
 from pyroute2.netns import create as ns_create
-from pyroute2.netns import setns as ns_setns
-from pyroute2.ethtool import Ethtool
+from pyroute2 import RTMGRP_LINK
 import threading
+from multiprocessing import Process, Event, Pipe
+import asyncio
+import sys
 
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
@@ -44,14 +46,13 @@ class NetworkInterface:
             "rx_missed_errors",
         )
     }
-    threads = []
+    processes = []
     # default namespace is indicated by passing namespace_str = None
     def __init__(self, intf_name, ip, namespace_str, stat_list):
         self.intf_name = intf_name
         self.ip = ip
         self.namespace_str = namespace_str   
         self.telemetry = dict()
-        self.stop_collection = threading.Event()
         self.snapshot_lock = threading.Lock()
         self.last_time_link_checked = 0
         self.intf_idx = None
@@ -63,11 +64,19 @@ class NetworkInterface:
             "duplex" : None,
             "autoneg" : None,
         }
+        self.threads = []
+        self._cached_data = dict()
         stat_list = set(stat_list)
         for item in stat_list:
             if not isinstance(item, str):
                 raise NetworkInterfaceException(f"Invalid Key '{item}' for telemetry dict!") 
-            self.telemetry[item] = 0
+            self.telemetry[item] = (time.time(), 0)
+        addrs = psutil.net_if_addrs().get(self.intf_name)
+        for addr in addrs:
+            if addr is not None and addr.family.name == "AF_LINK":
+                self.mac_address = addr.address
+        if self.mac_address is None:
+            raise NetworkInterfaceException(f"Could not find MAC address for interface '{self.intf_name}'")
         # adding the interface to the network namespace if its a custom namespace
         if self.namespace_str is not None:
             # creating the network namespace if a custom namespace is specified
@@ -90,38 +99,54 @@ class NetworkInterface:
             ipr.addr("add", index=self.intf_idx, address=self.ip, prefixlen=24)
             # bring the interface up
             ipr.link("set", index=self.intf_idx, state="up")
-        addrs = psutil.net_if_addrs().get(self.intf_name)
-        for addr in addrs:
-            if addr is not None and addr.family.name == "AF_LINK":
-                self.mac_address = addr.address
-        if self.mac_address is None:
-            raise NetworkInterfaceException(f"Could not find MAC address for interface '{self.intf_name}' number {self.intf_idx}")
         # scrape /sys/class/net for virtual files about each interface
         driver_dir = Path("/sys/class/net") / self.intf_name / "device" / "driver"
         actual_path = os.path.realpath(driver_dir)
         # printing out driver and mac address per interface
         self.driver_name = os.path.basename(actual_path)
-        NetworkInterface.threads.append(threading.Thread(target=self))
+        # spawning 2 threads per instance/interface, one to poll packet drop counters and another to listen for link status changes
+        self.threads.append(threading.Thread(target=self.poll_counters))
+        self.threads.append(threading.Thread(target=self.listen_link_status))
+        for thread in self.threads:
+            thread.start()
                 
     # returns the interface index and the namespace in which its defined
     def get_intf_index(self):
         return (self.namespace_str, self.intf_idx)
 
-    @staticmethod
-    def elapsed_ms(last_time, duration_ms):
-        return ((1000 * time.perf_counter()) - last_time) > duration_ms
-
-    def __call__(self):
-        # performs the system call netns which shifts the entire os namespace 
-        # and invalidates ipr if called within the context manager
-        if self.namespace_str is not None:
-            ns_setns(self.namespace_str) 
-        self.ethtool = Ethtool()
-        with IPRoute() as ipr:
-            while not self.stop_collection.is_set():  
+    # polling for packet drop statistics because kernel does not send multicast messages just because a counter was incremented
+    def poll_counters(self):
+        with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:    
+            while not NetworkInterfaceProcess.stop_collection.is_set():  
                 print("Checking packet drop statistics:")
                 self._collect(ipr)
-                time.sleep(0.01)
+                # at >=10G rates polling at 1s for packet drops can be too slow to accurately capture the time at which packets were dropped
+                time.sleep(0.01) 
+
+    # eventually we want to implement link status down => stop polling for counters, for now we just capture link status and report it
+    def listen_link_status(self):
+        # event driven architecture to have thread update link status only when kernel sends a multicast message 
+        # with a link status event, therefore avoiding unneccessary polling of link status
+        with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:
+            # socket is listening for link messages specifically rather than everything
+            ipr.bind(RTMGRP_LINK)
+            # have the socket wake up every 5s so that its not sleeping for a long time during when stop_collection was set
+            ipr.nl_socket.settimeout(5.0)  
+            # waits on the same Event as poll_counters, can seperate the two later if needed
+            while not NetworkInterfaceProcess.stop_collection.is_set():
+                try:
+                    # get is a blocking method that returns netlink messages via kernel system calls
+                    # it might throw timeout error if no message received because of settimeout from above, verify that though
+                    msg = ipr.get() 
+                    self._cached_data = msg[0]
+                    # filtering by interface index to avoid parsing the wrong one
+                    if self._cached_data['index'] != self.intf_idx:
+                        continue
+                    for attrs in self._cached_data['attrs']:
+                        if attrs[0] == 'IFLA_OPERSTATE':
+                            self.link["up"] = attrs[1]
+                except TimeoutError:
+                    pass
                 
     @staticmethod
     def discover_interfaces(wired_prefixes=('eth', 'en', 'em', 'br', 'lan'), wireless_prefixes=('wlan', 'wlp', 'wifi', 'wlan')):
@@ -139,9 +164,8 @@ class NetworkInterface:
             and name != 'lo'
         }
         print("Available Network Interfaces:\n")
-        for intf_name, addresses in wired_interfaces.items():
-            print(f"Interface: {intf_name}")
-
+        for intf_name, address in wired_interfaces.items():
+            print(f"Interface name: {intf_name} Address: {address}")
 
     # call this regularly preferably in its own thread to track packet drop and errors
     # inspect statistics like packet drop and throughput for a network interface 
@@ -162,26 +186,6 @@ class NetworkInterface:
             for stat in stats.keys():
                 if stat in self.telemetry:
                     self.telemetry[stat] = (time.time(), stats.get(stat, 0))        
-        if NetworkInterface.elapsed_ms(self.last_time_link_checked, 200):
-            self.last_time_link_checked = 1000 * time.perf_counter()
-            link_status = attrs.get('IFLA_OPERSTATE')
-            self.link["up"] = link_status
-            link = self.ethtool.get_link_mode(self.intf_name)
-            self.link["speed"] = link.speed
-            self.link["duplex"] = link.duplex
-            self.link["autoneg"] = link.autoneg
-
-    @staticmethod
-    # call this only once all the instances of NetworkInterface have been added
-    def start():
-        for thread in NetworkInterface.threads:
-            thread.start()
-
-    @staticmethod
-    # call this at the end of the program
-    def join():
-        for thread in NetworkInterface.threads:
-            thread.join()        
 
     def snapshot(self):
         with self.snapshot_lock:
@@ -192,47 +196,86 @@ class NetworkInterface:
         s2 = f" Speed: {self.link['speed']} Mb/s"
         s3 = f" Driver: {self.driver_name}"
         s4 = f" MAC: {self.mac_address}"
-        s5 = str(self.telemetry)
+        s5 = str(self.snapshot())
         return s1 + s2 + s3 + s4 + s5
-       
-def generate_traffic(rx, tx, bitrate, duration):
-    # 2. Run iperf3 to saturate the link (using UDP to force queue pressure)
-    print(f"Saturating link to {rx.ip} via {tx.intf_name}...")
+    
+class NetworkInterfaceProcess:
+    processes = []
+    stop_collection = Event()
+    
+    def __init__(self, intf_name, ip, namespace, stat_list, conn):
+        self.intf_name = intf_name
+        self.ip = ip
+        self.namespace = namespace
+        self.stat_list = stat_list
+        self.conn = conn
+        NetworkInterfaceProcess.stop_collection.clear()
+        NetworkInterfaceProcess.processes.append(
+            Process(
+                    target=NetworkInterfaceProcess.stream,
+                    args=(intf_name, ip, namespace, stat_list, conn)
+            )
+        )
+
+    @staticmethod
+    def startall():
+        for process in NetworkInterfaceProcess.processes:
+            process.start()
+
+    @staticmethod
+    def joinall():
+        for process in NetworkInterfaceProcess.processes:
+            process.join()
+
+    # use a pipe to stream the snapshot of the interface process 
+    # with static we avoid having to send all the data associated with
+    # the self object to the other process 
+    @staticmethod
+    def stream(intf_name, ip, namespace, stat_list, conn):
+        while not NetworkInterfaceProcess.stop_collection.is_set():        
+            intf = NetworkInterface(intf_name, ip, namespace, stat_list)
+            conn.send(intf.snapshot())
+
+    # returning a point in time snapshot using harvest
+    def snapshot(self):
+        pass
+
+async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    report = json.loads(result.stdout)
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT
+    )
+    data, err = await process.communicate()
+    if err:
+        print(f"Kernel/Process Error Captured: {err.decode('utf-8')}")
+    report = json.loads(data.decode('utf-8'))
     summary = report["end"]["sum"]
-    bits_ps = summary["bits_per_second"]
-    packets_lost = summary["lost_packets"]
-    packets_sent = summary["packets"]
-    loss_percent = summary["lost_percent"]
-    jitter_ms = summary["jitter_ms"]
-    if "error" in report:
-        raise RuntimeError(report["error"])
     return summary
 
-def run_test(rx, tx, bitrate, duration):
+async def harvest(conn):
+    data, timestamp_ms = conn.recv()
+
+async def run_test(rx, tx, bitrate, duration):
     def calculate_deltas(initial, final):
         delta = {}
         for key in initial:
             delta[key] = final[key][1] - initial[key][1]
         return delta
-    # 1. Snapshot L2 stats before the stress test
-    ms_start = int(time.time() * 1000)
-    initial_l2_rx = rx.snapshot()
-    initial_l2_tx = tx.snapshot()
-    # 2. generate traffic
-    summary = generate_traffic(rx, tx, bitrate, duration)
-    rx.stop_collection.set()
-    tx.stop_collection.set()
-    # 3. Snapshot L2 stats immediately after the test
-    final_l2_rx = rx.snapshot()
-    final_l2_tx = tx.snapshot()
-    ms_end = int(time.time() * 1000)
-    # 4. Calculate deltas
+    # Snapshot L2 stats before the stress test using pipes to pass data
+    initial_l2_rx, _ = rx.snapshot()
+    initial_l2_tx, start_ms_tx = tx.snapshot()
+    # generate traffic
+    summary = await generate_traffic_async(rx, tx, bitrate, duration)
+    NetworkInterfaceProcess.stop_collection.set()
+    # snapshot L2 stats immediately after the test
+    final_l2_rx, _ = rx.snapshot()
+    final_l2_tx, end_ms_tx = tx.snapshot()
+    # calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
     delta_tx = calculate_deltas(initial_l2_tx, final_l2_tx)
-    time_diff_ms = ms_end - ms_start 
+    time_diff_ms = end_ms_tx - start_ms_tx 
     print("\n=== NIC STATISTICS ===")
     print(f"RX packets: {delta_rx['rx_packets']}")
     print(f"RX bytes: {delta_rx['rx_bytes']}")
@@ -248,15 +291,19 @@ def run_test(rx, tx, bitrate, duration):
     print(f"Bits per second: {summary["bits_per_second"]}")
     print(f"Loss percent: {summary["lost_percent"]}")
     print(f"Jitter ms: {summary["jitter_ms"]}")
+    print(f"Time: {time_diff_ms}")
 
-def app(args):
+async def app(args):
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
+    # create pipes for process to process communication
+    tx_conn_1, tx_conn_2 = Pipe()
+    rx_conn_1, rx_conn_2 = Pipe()
     # create the tx and rx interfaces from command line arguments
-    tx = NetworkInterface(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"])
-    rx = NetworkInterface(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"])
+    tx = NetworkInterfaceProcess(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"], tx_conn_1)
+    rx = NetworkInterfaceProcess(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"], rx_conn_1)
     # calling start to launch the per-interface threads
-    NetworkInterface.start()
+    NetworkInterfaceProcess.startall()
     # using iperf3 to have the server that tracks the packets the client sent and checks how many actually made it to server
     # runs the command in the rxbench namespace specifically
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
@@ -269,7 +316,10 @@ def app(args):
         text=True
     )
     # running the iperf3 test to measure packet drop
-    run_test(rx, tx, args.bitrate, args.duration)
+    await run_test(rx, tx, args.bitrate, args.duration)
+    # viewing statistics in real time
+    await harvest(tx_conn_2)
+    await harvest(rx_conn_2)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -281,6 +331,6 @@ if __name__ == "__main__":
     parser.add_argument("--bitrate", default="1G")
     parser.add_argument("--duration", type=int, default=10)
     args = parser.parse_args()
-    app(args)
+    asyncio.run(app(args))
     # calling join at the end of the program for cleanup
-    NetworkInterface.join()
+    NetworkInterfaceProcess.joinall()
