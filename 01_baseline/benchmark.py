@@ -6,7 +6,6 @@ import argparse
 import json
 import time
 from pyroute2 import IPRoute, RTMGRP_LINK, netns
-from pyroute2.netns import create as ns_create, close as ns_close, remove as ns_remove
 import threading
 from multiprocessing import Process, Event, Pipe
 import asyncio
@@ -44,7 +43,6 @@ class NetworkInterface:
             "rx_missed_errors",
         )
     }
-    processes = []
     # default namespace is indicated by passing namespace_str = None
     def __init__(self, intf_name, ip, namespace_str, stat_list):
         self.intf_name = intf_name
@@ -83,7 +81,7 @@ class NetworkInterface:
         # adding the interface to the network namespace if its a custom namespace
         if self.namespace_str is not None:
             # creating the network namespace if a custom namespace is specified
-            ns_create(self.namespace_str)         
+            netns.create(self.namespace_str)         
             with IPRoute() as ipr:
                 # converting names of interfaces into numeric ids
                 indices = ipr.link_lookup(ifname=self.intf_name)
@@ -200,8 +198,25 @@ class NetworkInterface:
 
     def __del__(self):
         if self.namespace_str is not None and self.namespace_str in netns.listnetns():
-            ns_remove(self.namespace_str)
-    
+            netns.remove(self.namespace_str)
+
+"""
+trying to isolate each interface because if a link for one interface goes down, or if one interface stalls
+due to vibration causing the physical link to go down for a bit we dont want to stop tracking packets 
+for the other interfaces, nor do we want to miss our 10ms deadline
+
+multiprocessing specifically was used because we're doing a lot of writing, even when collecting statistics every 10ms and writing every 1s 
+that's a lot of data being written frequently which can cause the GIL to be held for a longer time and can miss the 10ms deadline
+by quite a bit. combine that with garbage collection, and heavy packet generation (done on same CPU) and 10ms could be missed frequently 
+and by a large margin.
+
+a 10ms deadline is used because it lets us accurately track packet drop statistics for 10G+ links in real time and how vibration affects the drop count
+
+using a single process for multiple interfaces with seperate network namespaces would trigger namespace switching which is tricky to manage
+and could get skipped during a netlink error, causing a socket to potentially be opened in the wrong namespace. seperate processes solve this because
+that process has a single namespace so there's no switching
+"""
+
 class NetworkInterfaceProcess:
     processes = []
     stop_collection = Event()
@@ -242,11 +257,13 @@ class NetworkInterfaceProcess:
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
+    # creates a subprocess managed by the os
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT
     )
+    # waits for the subprocess to finish
     data, err = await process.communicate()
     if err:
         print(f"Kernel/Process Error Captured: {err.decode('utf-8')}")
@@ -348,7 +365,7 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
 
 if __name__ == "__main__":
     for namespace in netns.listnetns():
-        ns_remove(namespace)
+        netns.remove(namespace)
     parser = argparse.ArgumentParser()
     parser.add_argument("tx_interface")
     parser.add_argument("rx_interface")
@@ -373,9 +390,10 @@ if __name__ == "__main__":
     buffer_rx = []
     # viewing statistics in real time
     try:
+        # creates the event loop for asyncio with the first coroutine as 'app'
         asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
     finally:
         if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
-            ns_remove(args.rx_namespace)
+            netns.remove(args.rx_namespace)
     # calling join at the end of the program for cleanup
     NetworkInterfaceProcess.joinall()
