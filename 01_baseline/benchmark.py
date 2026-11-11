@@ -297,9 +297,11 @@ class NetworkInterfaceProcess:
     @staticmethod
     def stream(intf_name, ip, namespace, stat_list, conn):
         intf = NetworkInterface(intf_name, ip, namespace, stat_list)
-        while not NetworkInterfaceProcess.stop_collection.is_set():        
+        timer = HighPerformanceTimer(wait_ms=10)
+        while not NetworkInterfaceProcess.stop_collection.is_set():      
             conn.send(intf.snapshot())
-            time.sleep(0.01)
+            NetworkInterfaceProcess.stop_collection.wait(timer.remaining_ms() / 1000)
+            timer.tick()  
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
@@ -331,7 +333,8 @@ async def monitor(conn, buffer, fname):
             data, timestamp_ms = await asyncio.to_thread(conn.recv)
             buffer.append((data, timestamp_ms))
         # every 1s publish the data collected so its responsive without 
-        # too much overhead of file I/O
+        # too much overhead of file I/O. don't require high performance timer here
+        # since this isn't a strict deadline
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
             _timestamp_ms = time.monotonic_ns() / 1E6
             publish(buffer[length:], fname)
