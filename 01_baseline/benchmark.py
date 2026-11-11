@@ -258,17 +258,17 @@ async def monitor(conn, buffer, fname):
     _timestamp_ms = time.monotonic_ns() / 1E6
     length = 0
     while not NetworkInterfaceProcess.stop_collection.is_set():
-        # recv is blocking so we want to check if there's available data
-        # before waiting for it to arrive via stream
-        if conn.poll():
+        # recv is blocking so we want to drain the pipe 
+        while conn.poll():
             # collect and push the data to the buffer
             data, timestamp_ms = await asyncio.to_thread(conn.recv)
             buffer.append((data, timestamp_ms))
         # every 1s publish the data collected so its responsive without 
         # too much overhead of file I/O
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
-            length = len(buffer)
+            _timestamp_ms = time.monotonic_ns() / 1E6
             publish(buffer[length:], fname)
+            length = len(buffer)
         # sleep for 5 ms to avoid 100% cpu spin while catching the data arriving every 10ms
         await asyncio.sleep(0.005)
     # publish one last time to include the last chunk of data
@@ -318,8 +318,8 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     print(f"Time: {time_diff_ms}")
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
-    asyncio.create_task(monitor(tx_conn_2, buffer_tx, "tx.txt"))
-    asyncio.create_task(monitor(rx_conn_2, buffer_rx, "rx.txt"))
+    asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file))
+    asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
     # create the tx and rx interfaces from command line arguments
@@ -350,7 +350,14 @@ if __name__ == "__main__":
     parser.add_argument("--rx-namespace", default="rxbench")
     parser.add_argument("--bitrate", default="1G")
     parser.add_argument("--duration", type=int, default=10)
+    parser.add_argument("--tx_file", default="tx.txt")
+    parser.add_argument("--rx_file", default="rx.txt")
     args = parser.parse_args()
+    # clearing existing file contents first
+    with open(args.tx_file, "w") as f:
+        pass
+    with open(args.rx_file, "w") as f:
+        pass
     # create pipes for process to process communication
     tx_conn_1, tx_conn_2 = Pipe()
     rx_conn_1, rx_conn_2 = Pipe()
