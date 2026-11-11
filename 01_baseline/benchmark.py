@@ -5,13 +5,11 @@ import os
 import argparse
 import json
 import time
-from pyroute2 import IPRoute
+from pyroute2 import IPRoute, RTMGRP_LINK
 from pyroute2.netns import create as ns_create
-from pyroute2 import RTMGRP_LINK
 import threading
 from multiprocessing import Process, Event, Pipe
 import asyncio
-import sys
 
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
@@ -189,7 +187,9 @@ class NetworkInterface:
 
     def snapshot(self):
         with self.snapshot_lock:
-            return self.telemetry.copy()
+            # reporting a snapshot of the telemetry dict 
+            # and the exact timestamp in ms when it was taken
+            return self.telemetry.copy(), time.monotonic_ns() / 1E6
            
     def __str__(self):
         s1 = f"Status: {self.link['up']}"
@@ -232,13 +232,22 @@ class NetworkInterfaceProcess:
     # the self object to the other process 
     @staticmethod
     def stream(intf_name, ip, namespace, stat_list, conn):
+        intf = NetworkInterface(intf_name, ip, namespace, stat_list)
         while not NetworkInterfaceProcess.stop_collection.is_set():        
-            intf = NetworkInterface(intf_name, ip, namespace, stat_list)
             conn.send(intf.snapshot())
+            time.sleep(0.01)
 
-    # returning a point in time snapshot using harvest
-    def snapshot(self):
-        pass
+    # returning a point in time snapshot
+    # this method might return later than when the timestamp was actually taken
+    # but it returns the earlier timestamp which is correctly associated with the data
+    async def snapshot(self, conn):
+        data = None
+        timestamp_ms = None
+        while conn.poll():
+            data, timestamp_ms = conn.recv()
+        if data is None or timestamp_ms is None:
+            data, timestamp_ms = await asyncio.to_thread(conn.recv)
+        return data, timestamp_ms
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
@@ -254,24 +263,27 @@ async def generate_traffic_async(rx, tx, bitrate, duration):
     summary = report["end"]["sum"]
     return summary
 
-async def harvest(conn):
-    data, timestamp_ms = conn.recv()
+# continuous real-time monitoring of packet statistics
+# scheduled with asyncio.create_task
+async def monitor(conn):
+    data, timestamp_ms = await asyncio.to_thread(conn.recv)
+    return data, timestamp_ms
 
-async def run_test(rx, tx, bitrate, duration):
+async def run_test(rx, tx, bitrate, duration, tx_conn_2, rx_conn_2):
     def calculate_deltas(initial, final):
         delta = {}
         for key in initial:
             delta[key] = final[key][1] - initial[key][1]
         return delta
     # Snapshot L2 stats before the stress test using pipes to pass data
-    initial_l2_rx, _ = rx.snapshot()
-    initial_l2_tx, start_ms_tx = tx.snapshot()
+    initial_l2_rx, _ = await rx.snapshot(rx_conn_2)
+    initial_l2_tx, start_ms_tx = await tx.snapshot(tx_conn_2)
     # generate traffic
     summary = await generate_traffic_async(rx, tx, bitrate, duration)
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
-    final_l2_rx, _ = rx.snapshot()
-    final_l2_tx, end_ms_tx = tx.snapshot()
+    final_l2_rx, _ = await rx.snapshot(rx_conn_2)
+    final_l2_tx, end_ms_tx = await tx.snapshot(tx_conn_2)
     # calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
     delta_tx = calculate_deltas(initial_l2_tx, final_l2_tx)
@@ -288,17 +300,16 @@ async def run_test(rx, tx, bitrate, duration):
     print(f"TX drops: {delta_tx['tx_dropped']}")
     print(f"TX errors: {delta_tx['tx_errors']}")
     print("\n=== IPERF3 SUMMARY ===")
-    print(f"Bits per second: {summary["bits_per_second"]}")
-    print(f"Loss percent: {summary["lost_percent"]}")
-    print(f"Jitter ms: {summary["jitter_ms"]}")
+    print(f"Bits per second: {summary['bits_per_second']}")
+    print(f"Loss percent: {summary['lost_percent']}")
+    print(f"Jitter ms: {summary['jitter_ms']}")
     print(f"Time: {time_diff_ms}")
 
-async def app(args):
+async def app(tx_conn_1, tx_conn_2, rx_conn_1, rx_conn_2, args):
+    asyncio.create_task(monitor(tx_conn_2))
+    asyncio.create_task(monitor(rx_conn_2))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
-    # create pipes for process to process communication
-    tx_conn_1, tx_conn_2 = Pipe()
-    rx_conn_1, rx_conn_2 = Pipe()
     # create the tx and rx interfaces from command line arguments
     tx = NetworkInterfaceProcess(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"], tx_conn_1)
     rx = NetworkInterfaceProcess(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"], rx_conn_1)
@@ -308,7 +319,7 @@ async def app(args):
     # runs the command in the rxbench namespace specifically
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
     cmd = subprocess.Popen([
-        "ip", "netns", "exec", rx.namespace_str, 
+        "ip", "netns", "exec", rx.namespace, 
         "iperf3", "-s", "-1", "-B", rx.ip
         ], 
         stdout=subprocess.DEVNULL, 
@@ -316,10 +327,7 @@ async def app(args):
         text=True
     )
     # running the iperf3 test to measure packet drop
-    await run_test(rx, tx, args.bitrate, args.duration)
-    # viewing statistics in real time
-    await harvest(tx_conn_2)
-    await harvest(rx_conn_2)
+    await run_test(rx, tx, args.bitrate, args.duration, tx_conn_2, rx_conn_2)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -331,6 +339,10 @@ if __name__ == "__main__":
     parser.add_argument("--bitrate", default="1G")
     parser.add_argument("--duration", type=int, default=10)
     args = parser.parse_args()
-    asyncio.run(app(args))
+    # create pipes for process to process communication
+    tx_conn_1, tx_conn_2 = Pipe()
+    rx_conn_1, rx_conn_2 = Pipe()
+    # viewing statistics in real time
+    asyncio.run(app(tx_conn_1, tx_conn_2, rx_conn_1, rx_conn_2, args))
     # calling join at the end of the program for cleanup
     NetworkInterfaceProcess.joinall()
