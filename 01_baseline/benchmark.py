@@ -75,6 +75,11 @@ class NetworkInterface:
                 self.mac_address = addr.address
         if self.mac_address is None:
             raise NetworkInterfaceException(f"Could not find MAC address for interface '{self.intf_name}'")
+        # scrape /sys/class/net for virtual files about each interface
+        driver_dir = Path("/sys/class/net") / self.intf_name / "device" / "driver"
+        actual_path = os.path.realpath(driver_dir)
+        # printing out driver and mac address per interface
+        self.driver_name = os.path.basename(actual_path)
         # adding the interface to the network namespace if its a custom namespace
         if self.namespace_str is not None:
             # creating the network namespace if a custom namespace is specified
@@ -97,11 +102,6 @@ class NetworkInterface:
             ipr.addr("add", index=self.intf_idx, address=self.ip, prefixlen=24)
             # bring the interface up
             ipr.link("set", index=self.intf_idx, state="up")
-        # scrape /sys/class/net for virtual files about each interface
-        driver_dir = Path("/sys/class/net") / self.intf_name / "device" / "driver"
-        actual_path = os.path.realpath(driver_dir)
-        # printing out driver and mac address per interface
-        self.driver_name = os.path.basename(actual_path)
         # spawning 2 threads per instance/interface, one to poll packet drop counters and another to listen for link status changes
         self.threads.append(threading.Thread(target=self.poll_counters))
         self.threads.append(threading.Thread(target=self.listen_link_status))
@@ -116,7 +116,6 @@ class NetworkInterface:
     def poll_counters(self):
         with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:    
             while not NetworkInterfaceProcess.stop_collection.is_set():  
-                print("Checking packet drop statistics:")
                 self._collect(ipr)
                 # at >=10G rates polling at 1s for packet drops can be too slow to accurately capture the time at which packets were dropped
                 time.sleep(0.01) 
@@ -264,12 +263,14 @@ async def monitor(conn, buffer, fname):
         if conn.poll():
             # collect and push the data to the buffer
             data, timestamp_ms = await asyncio.to_thread(conn.recv)
-            buffer.append(data, timestamp_ms)
+            buffer.append((data, timestamp_ms))
         # every 1s publish the data collected so its responsive without 
         # too much overhead of file I/O
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
             length = len(buffer)
             publish(buffer[length:], fname)
+        # sleep for 5 ms to avoid 100% cpu spin while catching the data arriving every 10ms
+        await asyncio.sleep(0.005)
     # publish one last time to include the last chunk of data
     publish(buffer[length:], fname)
 
@@ -284,6 +285,8 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
         for key in initial:
             delta[key] = final[key][1] - initial[key][1]
         return delta
+    # pausing to let the first element enter the buffers 
+    await asyncio.sleep(0.01)
     # Snapshot L2 stats before the stress test using pipes to pass data
     initial_l2_rx, _ =  buffer_rx[-1]
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
