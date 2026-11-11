@@ -237,18 +237,6 @@ class NetworkInterfaceProcess:
             conn.send(intf.snapshot())
             time.sleep(0.01)
 
-    # returning a point in time snapshot
-    # this method might return later than when the timestamp was actually taken
-    # but it returns the earlier timestamp which is correctly associated with the data
-    async def snapshot(self, conn):
-        data = None
-        timestamp_ms = None
-        while conn.poll():
-            data, timestamp_ms = conn.recv()
-        if data is None or timestamp_ms is None:
-            data, timestamp_ms = await asyncio.to_thread(conn.recv)
-        return data, timestamp_ms
-
 async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
     process = await asyncio.create_subprocess_exec(
@@ -264,26 +252,47 @@ async def generate_traffic_async(rx, tx, bitrate, duration):
     return summary
 
 # continuous real-time monitoring of packet statistics
+# this method might return later than when the timestamp was actually taken
+# but it returns the earlier timestamp which is correctly associated with the data
 # scheduled with asyncio.create_task
-async def monitor(conn):
-    data, timestamp_ms = await asyncio.to_thread(conn.recv)
-    return data, timestamp_ms
+async def monitor(conn, buffer, fname):
+    _timestamp_ms = time.monotonic_ns() / 1E6
+    length = 0
+    while not NetworkInterfaceProcess.stop_collection.is_set():
+        # recv is blocking so we want to check if there's available data
+        # before waiting for it to arrive via stream
+        if conn.poll():
+            # collect and push the data to the buffer
+            data, timestamp_ms = await asyncio.to_thread(conn.recv)
+            buffer.append(data, timestamp_ms)
+        # every 1s publish the data collected so its responsive without 
+        # too much overhead of file I/O
+        if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
+            length = len(buffer)
+            publish(buffer[length:], fname)
+    # publish one last time to include the last chunk of data
+    publish(buffer[length:], fname)
 
-async def run_test(rx, tx, bitrate, duration, tx_conn_2, rx_conn_2):
+def publish(buffer, fname):
+    with open(fname, 'a') as f:
+        for line in buffer:
+            f.write(f"Timestamp ms: {line[1]} Data: {line[0]}\n")
+
+async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     def calculate_deltas(initial, final):
         delta = {}
         for key in initial:
             delta[key] = final[key][1] - initial[key][1]
         return delta
     # Snapshot L2 stats before the stress test using pipes to pass data
-    initial_l2_rx, _ = await rx.snapshot(rx_conn_2)
-    initial_l2_tx, start_ms_tx = await tx.snapshot(tx_conn_2)
+    initial_l2_rx, _ =  buffer_rx[-1]
+    initial_l2_tx, start_ms_tx = buffer_tx[-1]
     # generate traffic
     summary = await generate_traffic_async(rx, tx, bitrate, duration)
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
-    final_l2_rx, _ = await rx.snapshot(rx_conn_2)
-    final_l2_tx, end_ms_tx = await tx.snapshot(tx_conn_2)
+    final_l2_rx, _ = buffer_rx[-1]
+    final_l2_tx, end_ms_tx = buffer_tx[-1]
     # calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
     delta_tx = calculate_deltas(initial_l2_tx, final_l2_tx)
@@ -305,9 +314,9 @@ async def run_test(rx, tx, bitrate, duration, tx_conn_2, rx_conn_2):
     print(f"Jitter ms: {summary['jitter_ms']}")
     print(f"Time: {time_diff_ms}")
 
-async def app(tx_conn_1, tx_conn_2, rx_conn_1, rx_conn_2, args):
-    asyncio.create_task(monitor(tx_conn_2))
-    asyncio.create_task(monitor(rx_conn_2))
+async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
+    asyncio.create_task(monitor(tx_conn_2, buffer_tx, "tx.txt"))
+    asyncio.create_task(monitor(rx_conn_2, buffer_rx, "rx.txt"))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
     # create the tx and rx interfaces from command line arguments
@@ -327,7 +336,7 @@ async def app(tx_conn_1, tx_conn_2, rx_conn_1, rx_conn_2, args):
         text=True
     )
     # running the iperf3 test to measure packet drop
-    await run_test(rx, tx, args.bitrate, args.duration, tx_conn_2, rx_conn_2)
+    await run_test(rx, tx, args.bitrate, args.duration, buffer_tx, buffer_rx)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -342,7 +351,10 @@ if __name__ == "__main__":
     # create pipes for process to process communication
     tx_conn_1, tx_conn_2 = Pipe()
     rx_conn_1, rx_conn_2 = Pipe()
+    # create buffers to store snapshots of data 
+    buffer_tx = []
+    buffer_rx = []
     # viewing statistics in real time
-    asyncio.run(app(tx_conn_1, tx_conn_2, rx_conn_1, rx_conn_2, args))
+    asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
     # calling join at the end of the program for cleanup
     NetworkInterfaceProcess.joinall()
