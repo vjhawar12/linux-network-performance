@@ -23,27 +23,37 @@ a virtual networking stack so that the routing table doesn't think the rx interf
 tx interface and so the kernel doesn't use the loopback interface to route the packets between tx and rx interfaces
 """
 
-class HighPerformanceTimer():
+class NetworkInterfaceException(Exception):
+    pass
+
+# high performance timer tracks time with ns precision and maintains its own internal state so its 
+# not subject to os jitter (the kernel scheduling a thread slightly late) affecting when it calculates the deadline
+class HighPerformanceTimer:
     def __init__(self, wait_ms):
         self.last_timestamp = time.monotonic_ns() / 1E6
+        self.wait_ms = wait_ms
         self.deadline_ms = wait_ms + self.last_timestamp
 
-    def reset_deadline(self, reset_ms):
-        self.last_timestamp = time.monotonic_ns() / 1E6
-        self.deadline_ms = reset_ms + self.last_timestamp
+    # computes the next deadline
+    def tick(self):
+        now = time.monotonic_ns() / 1E6
+        if now > self.deadline_ms:
+            times = 1 + ((now - self.deadline_ms) // self.wait_ms)
+            self.deadline_ms += times * self.wait_ms
 
+    # returns True if the last-set deadline was exceeded 
     def elapsed(self):
         now = time.monotonic_ns() / 1E6
         if  now >= self.deadline_ms:
             self.last_timestamp = now
             return True
+        return False
 
+    # returns the difference between the current nanosecond and the deadline
+    # will return 0 if deadline was exceeded
     def remaining_ms(self):
         now = time.monotonic_ns() / 1E6
-        return self.deadline_ms - now
-
-class NetworkInterfaceException(Exception):
-    pass
+        return max(0, self.deadline_ms - now)
 
 class NetworkInterface:
     STAT_NAMES = {
@@ -136,8 +146,8 @@ class NetworkInterface:
         with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:    
             while not NetworkInterfaceProcess.stop_collection.is_set():  
                 self._collect(ipr)
-                NetworkInterfaceProcess.stop_collection.wait(timer.remaining_ms())
-                timer.reset_deadline(reset_ms=10)
+                NetworkInterfaceProcess.stop_collection.wait(timer.remaining_ms() / 1000)
+                timer.tick()
 
     # eventually we want to implement link status down => stop polling for counters, for now we just capture link status and report it
     def listen_link_status(self):
