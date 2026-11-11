@@ -23,6 +23,25 @@ a virtual networking stack so that the routing table doesn't think the rx interf
 tx interface and so the kernel doesn't use the loopback interface to route the packets between tx and rx interfaces
 """
 
+class HighPerformanceTimer():
+    def __init__(self, wait_ms):
+        self.last_timestamp = time.monotonic_ns() / 1E6
+        self.deadline_ms = wait_ms + self.last_timestamp
+
+    def reset_deadline(self, reset_ms):
+        self.last_timestamp = time.monotonic_ns() / 1E6
+        self.deadline_ms = reset_ms + self.last_timestamp
+
+    def elapsed(self):
+        now = time.monotonic_ns() / 1E6
+        if  now >= self.deadline_ms:
+            self.last_timestamp = now
+            return True
+
+    def remaining_ms(self):
+        now = time.monotonic_ns() / 1E6
+        return self.deadline_ms - now
+
 class NetworkInterfaceException(Exception):
     pass
 
@@ -112,11 +131,13 @@ class NetworkInterface:
 
     # polling for packet drop statistics because kernel does not send multicast messages just because a counter was incremented
     def poll_counters(self):
+        # polling at 10ms
+        timer = HighPerformanceTimer(wait_ms=10)
         with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:    
             while not NetworkInterfaceProcess.stop_collection.is_set():  
                 self._collect(ipr)
-                # at >=10G rates polling at 1s for packet drops can be too slow to accurately capture the time at which packets were dropped
-                time.sleep(0.01) 
+                NetworkInterfaceProcess.stop_collection.wait(timer.remaining_ms())
+                timer.reset_deadline(reset_ms=10)
 
     # eventually we want to implement link status down => stop polling for counters, for now we just capture link status and report it
     def listen_link_status(self):
@@ -176,11 +197,18 @@ class NetworkInterface:
         # Convert attributes tuple list into a workable dictionary
         attrs = link_data['attrs']        
         # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
-        stats = attrs.get('IFLA_STATS64')
-        with self.snapshot_lock:
-            for stat in stats.keys():
-                if stat in self.telemetry:
-                    self.telemetry[stat] = (time.time(), stats.get(stat, 0))        
+        stats = None
+        for attr in attrs:
+            if attr[0] == "IFLA_STATS64":
+                stats = attr[1]
+                break
+        if stats is not None:
+            with self.snapshot_lock:
+                for stat in stats.keys():
+                    if stat in self.telemetry:
+                        self.telemetry[stat] = (time.time(), stats.get(stat, 0))
+        else:
+            raise NetworkInterfaceException("Could not find IFLA_STATS64")        
 
     def snapshot(self):
         with self.snapshot_lock:
@@ -201,20 +229,28 @@ class NetworkInterface:
             netns.remove(self.namespace_str)
 
 """
+why multiprocessing 
+
 trying to isolate each interface because if a link for one interface goes down, or if one interface stalls
 due to vibration causing the physical link to go down for a bit we dont want to stop tracking packets 
 for the other interfaces, nor do we want to miss our 10ms deadline
 
 multiprocessing specifically was used because we're doing a lot of writing, even when collecting statistics every 10ms and writing every 1s 
 that's a lot of data being written frequently which can cause the GIL to be held for a longer time and can miss the 10ms deadline
-by quite a bit. combine that with garbage collection, and heavy packet generation (done on same CPU) and 10ms could be missed frequently 
+by quite a bit. combine that with garbage collection, and heavy packet generation (done on same host) and 10ms could be missed frequently 
 and by a large margin.
 
 a 10ms deadline is used because it lets us accurately track packet drop statistics for 10G+ links in real time and how vibration affects the drop count
+for automotive/aerospace applications vibration can happen at very high frequencies causing the physical connector to oscillate very quickly, 
+so a slower deadline would be too coarse and could smooth out the data not providing enough granularity into vibration analysis during sine-sweep tests
+on the shaker table
 
 using a single process for multiple interfaces with seperate network namespaces would trigger namespace switching which is tricky to manage
 and could get skipped during a netlink error, causing a socket to potentially be opened in the wrong namespace. seperate processes solve this because
 that process has a single namespace so there's no switching
+
+core pinning is another reason why multiprocessing was chosen, at 40/100G speeds to fully saturate the link, the cpu core has to generate a lot of packets
+and that can overwhelm it, so we'd want to pin certain cores for packet generation exclusively which would require managing multiple processes
 """
 
 class NetworkInterfaceProcess:
@@ -340,8 +376,8 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     print(f"Time: {time_diff_ms}")
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
-    asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file))
-    asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file))
+    monitor_tx = asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file))
+    monitor_rx = asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
     # create the tx and rx interfaces from command line arguments
@@ -362,10 +398,10 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     )
     # running the iperf3 test to measure packet drop
     await run_test(rx, tx, args.bitrate, args.duration, buffer_tx, buffer_rx)
+    # need to wait for monitor to finish before app returns and shutdown
+    await asyncio.gather(monitor_tx, monitor_rx)
 
 if __name__ == "__main__":
-    for namespace in netns.listnetns():
-        netns.remove(namespace)
     parser = argparse.ArgumentParser()
     parser.add_argument("tx_interface")
     parser.add_argument("rx_interface")
@@ -377,6 +413,8 @@ if __name__ == "__main__":
     parser.add_argument("--tx_file", default="tx.txt")
     parser.add_argument("--rx_file", default="rx.txt")
     args = parser.parse_args()
+    if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
+        netns.remove(args.rx_namespace)
     # clearing existing file contents first
     with open(args.tx_file, "w") as f:
         pass
