@@ -5,8 +5,8 @@ import os
 import argparse
 import json
 import time
-from pyroute2 import IPRoute, RTMGRP_LINK
-from pyroute2.netns import create as ns_create
+from pyroute2 import IPRoute, RTMGRP_LINK, netns
+from pyroute2.netns import create as ns_create, close as ns_close, remove as ns_remove
 import threading
 from multiprocessing import Process, Event, Pipe
 import asyncio
@@ -197,6 +197,10 @@ class NetworkInterface:
         s4 = f" MAC: {self.mac_address}"
         s5 = str(self.snapshot())
         return s1 + s2 + s3 + s4 + s5
+
+    def __del__(self):
+        if self.namespace_str is not None and self.namespace_str in netns.listnetns():
+            ns_remove(self.namespace_str)
     
 class NetworkInterfaceProcess:
     processes = []
@@ -286,7 +290,8 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
             delta[key] = final[key][1] - initial[key][1]
         return delta
     # pausing to let the first element enter the buffers 
-    await asyncio.sleep(0.01)
+    while not buffer_rx or not buffer_tx:
+        await asyncio.sleep(0.01)
     # Snapshot L2 stats before the stress test using pipes to pass data
     initial_l2_rx, _ =  buffer_rx[-1]
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
@@ -342,6 +347,8 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     await run_test(rx, tx, args.bitrate, args.duration, buffer_tx, buffer_rx)
 
 if __name__ == "__main__":
+    for namespace in netns.listnetns():
+        ns_remove(namespace)
     parser = argparse.ArgumentParser()
     parser.add_argument("tx_interface")
     parser.add_argument("rx_interface")
@@ -365,6 +372,10 @@ if __name__ == "__main__":
     buffer_tx = []
     buffer_rx = []
     # viewing statistics in real time
-    asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
+    try:
+        asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
+    finally:
+        if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
+            ns_remove(args.rx_namespace)
     # calling join at the end of the program for cleanup
     NetworkInterfaceProcess.joinall()
