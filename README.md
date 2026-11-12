@@ -1,73 +1,113 @@
 # Linux Network Performance
 
-A staged Linux networking project for characterizing high-speed Ethernet traffic, Linux host/NIC behavior, and performance bottlenecks. The proposed experiment is a **10 GbE host–switch–host forwarding path through an external Ethernet switch test board**. This is distinct from the separate SAMV71/LAN9693 firmware-porting work.
+A staged Linux networking project for **characterizing Ethernet NICs, physical links, and external switch forwarding**, starting with two physical NIC ports connected through an external switch. The long-term goal is to identify host, NIC, switch, and physical-link bottlenecks under increasing packet rates, including environmental vibration testing.
 
-> **Status (October 2026):** Phase A is an **in-development Python prototype**, not a working or validated benchmark. The repository contains no verified switch-throughput, packet-loss, or 10 Gb/s performance results. Phases B–E are design roadmaps only.
+**Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-## What's implemented today
+> **Status (November 2026):** Stage 1 is an unvalidated Python + iperf3 prototype. No complete physical switch benchmark, 10 Gb/s result, or 40/100/400 Gb/s performance result is established yet. Stages 2–4 and shared-code extraction are planned only.
 
-- Python CLI options for two NIC interfaces, destination/source IPs, namespace, offered bitrate and duration.
-- Initial UDP `iperf3` subprocess integration and JSON reporting logic (needs error-handling/schema fixes).
-- A threaded TX/RX statistics polling design using `pyroute2`/rtnetlink `IFLA_STATS64`, snapshots, and counter deltas.
-- Host interface inspection with `psutil` and sysfs; preliminary network-namespace setup and server launch helpers.
+## Four-stage packet-I/O roadmap
 
-**Not yet complete:** safe namespace creation/configuration, end-to-end execution, verified physical traffic through the switch, error handling, automated tests, saved reports, and repeatable performance measurements. The source is **not a ready-to-run benchmark**; see [Phase A blockers](01_baseline/README.md#known-blockers-at-current-head).
+| Stage | Directory | Traffic mechanism | Core engineering question | Target experiment |
+| --- | --- | --- | --- | --- |
+| **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | Initial 10 GbE |
+| **2. Raw Ethernet** | [`02_af_packet/`](02_af_packet/README.md) | C++ sender/receiver using `AF_PACKET` | What changes when we control L2 frames and packet batching? | Compare on 10 GbE |
+| **3. AF_XDP** | [`03_af_xdp/`](03_af_xdp/README.md) | C++ AF_XDP rings and UMEM | Does ring-based I/O and supported zero-copy improve packet-rate/CPU efficiency? | Explore 10–40 GbE |
+| **4. DPDK** | [`04_dpdk/`](04_dpdk/README.md) | C++ DPDK Ethernet engine | How do multi-queue, multicore, NUMA, and NIC capabilities scale? | Long-term 100–400 GbE |
+
+**Speed ranges are ambitions, not technology limits or guaranteed results.** AF_PACKET can run on faster links, AF_XDP is not capped at 40G, and DPDK is useful below 100G. Performance depends on hardware, driver, kernel, frame sizes, host processing, and workload. Each stage must be measured against the previous one; lower-level APIs are not inherently faster or more accurate.
+
+Supporting tools are **not extra stages**: [kernel pktgen](diagnostics/kernel_pktgen/README.md) provides an independent packet-rate reference, and [kernel tracing](diagnostics/kernel_tracing/README.md) helps explain bottlenecks.
+
+## Architecture and responsibilities
+
+```text
+                   Python experiment runner
+      experiment config / lifecycle / backend selection
+            interface setup / reporting / logs
+                            |
+                   traffic engine boundary
+          +-----------------+------------------+
+          |                 |                  |
+       iperf3          C++ AF_PACKET      C++ AF_XDP / DPDK
+       Stage 1           Stage 2           Stages 3–4
+          +-----------------+------------------+
+                            |
+               TX NIC -> switch -> RX NIC
+                            |
+             telemetry + packet accounting
+     rtnetlink / ethtool / backend NIC stats / switch counters
+                            |
+                     saved results
+```
+
+- **Python owns the control plane:** select backends, validate test settings, start/stop processes, supervise readiness and errors, collect telemetry, and compare results across runs.
+- **C++ owns the data path for Stages 2–4:** construct Ethernet frames, pace and batch TX, receive and sequence frames, manage rings/buffers/queues, and expose results/counters.
+- **Integrate at coarse granularity:** C++ executables controlled by Python subprocesses are a straightforward first approach. pybind11 or another native interface may be introduced if justified, but don't call Python once per packet.
+- **Share code incrementally:** keep the existing baseline intact until tested, then extract reused Python orchestration/telemetry and C++ frame definitions into [`common/`](common/README.md). Do not copy the entire Python script for each stage.
+- **Use backend-aware telemetry:** Linux rtnetlink works for conventional interfaces but may not expose NICs controlled through some DPDK PMDs; later engines must expose appropriate native statistics.
+
+## Repository layout
+
+```text
+linux-network-performance/
+├── 01_baseline/             # Existing Python/iperf3 prototype
+│   ├── benchmark.py
+│   └── README.md
+├── 02_af_packet/            # Planned C++ raw Ethernet
+│   └── README.md
+├── 03_af_xdp/               # Planned C++ AF_XDP
+│   └── README.md
+├── 04_dpdk/                 # Planned C++ DPDK
+│   └── README.md
+├── common/                  # Planned shared runner, reports, test protocol
+│   └── README.md
+├── diagnostics/
+│   ├── kernel_pktgen/       # Supporting packet generator comparison
+│   │   └── README.md
+│   └── kernel_tracing/      # Supporting bottleneck analysis
+│       └── README.md
+├── CMakeLists.txt           # Existing experimental C++ scaffold
+└── main.cpp                 # Existing experimental C++ scaffold
+```
+
+Stages 2–4 and `common/` currently contain **documentation, not implementations**. The existing `01_baseline/` also has experimental C/C++ files; they are not a finished traffic engine. Future `src/`, `common/python/`, `common/cpp/`, and `tests/` will be added as implementation progresses.
 
 ## Test topology
 
-The intended baseline uses **two distinct physical Ethernet ports**, potentially on the same multiport NIC:
-
 ```text
-             One Linux x86 host
-    +----------------------------------+
-    | iperf3 client     iperf3 server  |
-    | Default netns     Receiver netns |
-    |      |                  ^        |
-    |  TX interface       RX interface |
-    +------|------------------|--------+
-           |                  |
-           v                  |
-     Switch ingress --> Switch egress
-         (external switch forwarding)
+                   One Linux host
+          default netns             RX netns
+           test sender            test receiver
+                |                      ^
+              TX NIC                 RX NIC
+                |                      ^
+                v                      |
+            external switch: ingress -> egress
 ```
 
-The current host has an **Intel X710 four-port 10 GbE SFP+ controller** (Linux `i40e` driver) and **Intel X722 10GBASE-T interfaces**. A proposed same-adapter baseline uses X710 ports `enp23s0f0np0` (TX) and `enp23s0f1np1` (RX). Their 10 Gb/s link status has been observed, but **physical cable-to-switch-port mapping is not yet confirmed**.
+The initial proposed host includes Intel X710 10 GbE SFP+ ports (`i40e`), with `enp23s0f0np0` and `enp23s0f1np1` as candidate TX and RX ports, plus Intel X722 interfaces. **Cabling and physical switch-port mapping remain unverified.** The sample addresses `172.31.250.1` and `172.31.250.2` are unapproved placeholders.
 
-Because both test ports reside on the same host, assigning two IP addresses in the *same* network namespace can lead to local kernel delivery instead of packets traversing the switch. The plan is to put the receiver interface and iperf3 server in a separate network namespace and verify traffic on both physical NICs. A cross-adapter profile can be added later if the X722 cabling/media and switch ports support it.
+With Stage 1's UDP/IP traffic, the RX namespace prevents Linux from delivering packets internally when both endpoints are on one host. Raw L2 backends can explicitly select the outgoing physical interface and Ethernet destination MAC, so the IP routing workaround may no longer be needed. In all cases, verify that the test actually traverses the intended physical switch rather than assuming so from socket results.
 
-The example addresses `172.31.250.1/30` and `172.31.250.2/30` are **proposed test values, not provisioned or approved subnets**. Do not apply them without checking the existing host networking and confirming the physical path.
+## Measurement contract across stages
 
-## Roadmap
+Record the same categories consistently so backends can be compared:
 
-| Directory | Phase | Objective | Status |
-|---|---|---|---|
-| [01_baseline](01_baseline/README.md) | A — Linux tools + Python | Establish iperf3 throughput/loss and NIC-counter baselines | **In progress** |
-| [02_kernel_pktgen](02_kernel_pktgen/README.md) | B — Kernel pktgen | Compare in-kernel traffic generation and packet-rate limits | Planned |
-| [03_socket_engine](03_socket_engine/README.md) | C — Socket engine | Implement a controlled C traffic generator/receiver | Planned |
-| [04_kernel_tracing](04_kernel_tracing/README.md) | D — Kernel tracing | Diagnose IRQ, softirq, queue, and drop behavior | Planned |
-| [05_advanced_io](05_advanced_io/README.md) | E — Advanced I/O | Evaluate AF_XDP/DPDK if earlier measurements justify it | Optional / planned |
+- **Workload:** backend/version, run ID, sender/receiver NICs, queue, switch, frame size, payload format, test duration, offered rate, achieved bitrate/frames per second, and direction.
+- **Per-frame accounting:** attempted/successful sends and received frames; custom Stage 2–4 frames share a versioned test ID/sequence number, with duplicate/missing/out-of-order accounting.
+- **Hardware and software:** CPU consumption, Linux driver/NIC queue counters, link state and errors (including CRC where available), and switch ingress/egress counters when exposed.
+- **Time and environment:** actual collection timestamps and intervals, missed polling deadlines, driver/kernel/NIC details, and eventually shaker-table measurements.
 
-## Measurement model
+A receiving application seeing missing packets does **not** prove the switch dropped them: the loss could be in the sender, kernel, NIC, physical link, switch, or receiver. Use independent observation points. A nominal 10 ms stats poll provides observation granularity, **not exact timing of sub-10 ms vibration events**. Count Ethernet wire overhead (headers, FCS, preamble and interframe gap) when comparing line rates; use equivalent frame lengths for fair backend comparisons.
 
-A useful benchmark combines **multiple independent observation points**:
+## Current priorities
 
-- **Application:** iperf3 sender/receiver bitrate, UDP sequence-based loss, jitter, duration.
-- **Host network interface:** `/sys/class/net/<interface>/statistics/` counters such as TX/RX packets, bytes, drops, and errors.
-- **NIC/driver:** `ethtool -S <interface>` (e.g., Intel `i40e` per-queue and port counters).
-- **Switch:** external switch ingress/egress counters if available (future integration).
+1. **Stabilize Stage 1:** validate startup, ready events, first/final counters, failures/cleanup, and a virtual-network smoke test.
+2. **Test on physical 10 GbE:** confirm switch forwarding and baseline throughput/loss/NIC counters before claims about hardware behavior.
+3. **Build Stage 2 separately:** C++ AF_PACKET frame generator and receiver; keep iperf3 as an independent baseline and evolve Python into a reusable controller.
+4. **Profile before escalating:** advance to AF_XDP and DPDK where the NIC supports them and measurements justify the complexity. Use diagnostic tools as needed.
 
-An iperf3 loss number is not equivalent to NIC `rx_dropped`; a zero NIC error count does not prove the external switch never discarded packets. Counters are cumulative and must be compared before and after a controlled run. Background traffic and different hardware accounting points can affect comparisons.
+## Safety
 
-## Safety and reproducibility
-
-- Confirm cabling, VLAN/forwarding configuration, management connectivity, and subnet availability **before** modifying interface addresses or network namespaces.
-- Keep privileged network setup separate from the benchmark runner. Avoid moving a management interface into a namespace.
-- Begin with low offered load and verify the actual physical path; increase rate and vary packet size only after validation.
-- Record test direction, interface names, adapter/driver, link speed, packet size, target bitrate, duration, and counter deltas.
-- Test results represent the complete **host–NIC–switch–NIC–host** path. Host CPU, PCIe, driver, and receive processing may become bottlenecks.
-
-See [Phase A](01_baseline/README.md) for the current implementation and its outstanding fixes.
-
-## Current code
-
-`01_baseline/benchmark.py` is the only implemented benchmark source at present. Planned local requirements include Linux, Python, `iperf3`, `iproute2`, `ethtool`, and Python packages `psutil` and `pyroute2` (the current script imports them). Namespace setup, counter initialization, and iperf3 reporting require fixes **before it can be treated as runnable or used for measurements**. The code presently cannot complete the described benchmark end-to-end.
+Use approved isolated NICs, addresses and switch ports. Never move or unbind a management interface, remove a namespace you do not own, or send disruptive high-rate traffic on a shared network. This repository is experimental and has no certified performance or reliability claims.

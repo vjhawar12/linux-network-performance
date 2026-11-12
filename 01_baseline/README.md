@@ -1,122 +1,82 @@
-# Phase A — Baseline Network Benchmarking
+# Stage 1 — Python + iperf3 Baseline
 
-**Status: Python prototype under development — no validated test runs or switch-performance measurements.** Phase A aims to establish an end-to-end measurement harness using Python, `iperf3`, rtnetlink NIC counters, and eventually driver-specific/switch-port statistics. It is *not* a custom kernel packet generator.
+**Status: implemented prototype; no validated end-to-end switch test yet.** Stage 1 establishes the reference experiment before we build the custom C++ traffic engines in [Stage 2](../02_af_packet/README.md), [Stage 3](../03_af_xdp/README.md), and [Stage 4](../04_dpdk/README.md). The Python runner and monitoring logic should remain available as a comparison baseline.
 
-## Objective
+## Goal and topology
 
-For a verified physical path from a source NIC port through the switch to a destination NIC port:
-
-1. Generate reproducible UDP traffic at specified offered bitrates and durations.
-2. Report **receiver-side iperf3 throughput, UDP loss, and jitter**.
-3. Snapshot TX-interface and RX-interface counters **before and after** each run.
-4. Record configuration, results, and errors so multiple rates/packet sizes can be compared.
-5. Distinguish evidence from host-side processing, NIC counters, and (later) switch-port statistics without falsely equating them.
-
-## Intended test path
+Measure traffic, drops, errors and timing through an actual TX NIC -> external switch -> RX NIC forwarding path, initially with UDP `iperf3` at 10 GbE.
 
 ```text
-Same Linux host (default netns)         Same Linux host (rxbench netns)
-iperf3 client                           iperf3 server
-    |                                       ^
-Intel X710 port 0                       Intel X710 port 1
-enp23s0f0np0                            enp23s0f1np1
-    |                                       ^
-    +--> external switch ingress --> egress --------+
+Linux host / default netns         Same host / rxbench netns
+        iperf3 client                    iperf3 server
+             |                                ^
+           TX NIC                           RX NIC
+             |                                ^
+             +--> external switch -----------+
 ```
 
-| Setting | Proposed baseline | Verification needed |
-|---|---|---|
-| TX device | `enp23s0f0np0` | Confirm physical external switch connection |
-| RX device | `enp23s0f1np1` | Confirm physical external switch connection |
-| TX namespace | Default namespace | Ensure route selects intended port |
-| RX namespace | `rxbench` | Create only after safety checks |
-| TX IP | `172.31.250.1/30` | Subnet not yet approved/configured |
-| RX IP | `172.31.250.2/30` | Subnet not yet approved/configured |
-| Link rate | Both ports report 10 Gb/s | Confirm under test and record settings |
+Candidate ports: Intel X710 `enp23s0f0np0` and `enp23s0f1np1`. Confirm physical cabling, switch forwarding, interface ownership, and addressing before attempting an experiment. A separate RX namespace prevents unintended local IP delivery when both NICs belong to the same machine.
 
-**Why a separate RX namespace?** If both addresses belong to the same host network namespace, Linux can route the destination IP locally instead of transmitting through the switch. Namespace separation allows independent routing/socket state. It does **not** replace physical cable, VLAN, or packet-path verification.
+## Current code
 
-The separate-adapter alternative (X710 TX → X722 RX) remains a *future profile*, contingent on suitable switch connectivity and physical media.
+The existing [`benchmark.py`](benchmark.py) includes:
 
-## Requirements (development)
+- Python CLI for interface names, addressing, RX namespace, bitrate, duration and output files.
+- One process per TX/RX interface, with worker threads for `IFLA_STATS64` polling and rtnetlink link-status events.
+- A nominal 10 ms monotonic-deadline timer for polling/streaming; worker snapshots are transferred through `multiprocessing.Pipe`.
+- Asyncio monitor tasks that drain telemetry from the pipes, buffer samples and periodically append them to disk.
+- UDP iperf3 client/server orchestration and initial/final interface counter-delta calculation.
+- Events for namespace creation and stream lifecycle.
 
-- Linux with access to the intended Ethernet NICs; `ip` from iproute2, `ethtool`, `iperf3`.
-- Python, `psutil`, and `pyroute2`; namespace setup and Netlink collection require corrections before running.
-- Permissions to inspect the required NIC counters. Network setup, namespaces, and server startup can require elevated privileges.
-- An iperf3 server bound to the intended receiver IP *inside* the receiver namespace once it has been configured.
+The directory also includes exploratory C/C++ source and headers. These are scaffolding, **not** a validated custom packet generator. Stages 2–4 are separate future backends; reusable Python code will be extracted into [`common/`](../common/README.md) after Stage 1 works.
 
-**Do not use a management interface or management IP as the test destination.** Traffic to another address on the same host does not by itself demonstrate a path through the external switch.
+## Requirements and safety
 
-### Read-only discovery (before network changes)
+Linux, Python, `psutil`, `pyroute2`, `iperf3`, `iproute2`, `ethtool`, and appropriate permissions for interface/network-namespace configuration.
+
+Read-only checks:
 
 ```bash
-ethtool -i enp23s0f0np0
-ethtool enp23s0f0np0
-ethtool -i enp23s0f1np1
-ethtool enp23s0f1np1
 ip -br address
 ip netns list
+ethtool -i enp23s0f0np0
+ethtool -i enp23s0f1np1
 ethtool -S enp23s0f0np0
 ```
 
-Confirm switch-port mapping and that neither candidate interface is serving a production connection. Check the VLANs, subnets, and network manager before creating namespaces or assigning addresses.
-
-## Intended CLI (after current bugs are fixed)
+**Intended CLI, not a validated quick-start** (use only approved interfaces/addresses):
 
 ```bash
 python3 01_baseline/benchmark.py \
-    enp23s0f0np0 enp23s0f1np1 \
-    --tx-ip 172.31.250.1 \
-    --rx-ip 172.31.250.2 \
-    --rx-namespace rxbench \
-    --bitrate 1G \
-    --duration 10
+  enp23s0f0np0 enp23s0f1np1 \
+  --tx-ip 172.31.250.1 --rx-ip 172.31.250.2 \
+  --rx-namespace rxbench --bitrate 1G --duration 10
 ```
 
-**Design example only — do not run this command as a validated quick-start.** The example IPs are unapproved placeholders. The source contains an `iperf3` server launcher, but it is not yet correctly integrated, checked, or cleaned up. Do not change networking or generate traffic before verifying management safety, routes, cabling, and switch forwarding.
+The current script configures addresses using **/24**, whereas the earlier test plan specified **/30**; reconcile before repeatable measurements. The script can remove an existing namespace named by the CLI; do not use a namespace or NIC owned by another program or your management network.
 
-## Measurements
+## Known gaps before trusting a benchmark
 
-| Layer / source | Planned data | Interpretation |
-|---|---|---|
-| TX rtnetlink `IFLA_STATS64` | `tx_packets`, `tx_bytes`, `tx_dropped`, `tx_errors` | Sender interface/driver view |
-| RX rtnetlink `IFLA_STATS64` | `rx_packets`, `rx_bytes`, `rx_dropped`, `rx_errors`, `rx_crc_errors`, `rx_missed_errors` | Receiver interface/driver view |
-| iperf3 JSON | Sender/receiver bitrate, UDP packets/loss, jitter | End-to-end application view |
-| `ethtool -S` (later) | Device/port/queue-specific diagnostics | Driver-specific evidence |
-| external switch counters (later) | Ingress, egress, drops/errors | Switch-side evidence |
+1. **Startup order:** the `namespace_created` event is set after creating the namespace, *before* moving and configuring the RX NIC. A full-interface-ready event, verified listening server, and failed-worker detection are still needed.
+2. **First valid sample:** the stream can send initial zero-valued telemetry before the first `IFLA_STATS64` acquisition completes.
+3. **End-of-test boundary:** synchronous event waits inside `async def` can block monitors; the last buffered sample may predate the traffic end because a final collection/pipe-drain handshake is absent.
+4. **Error/cleanup:** iperf3 subprocess exit codes/JSON failures, worker failure handling, timeout/cleanup, and namespace ownership are not yet fully hardened. Buffers grow through a test session.
+5. **Timing:** 10 ms is a target interval, not real-time determinism. Measure actual collection timing and missed deadlines. Timestamp counter acquisition instead of only cached snapshot serialization.
 
-`/sys/class/net/.../statistics` values are cumulative; use deltas. They are kernel-reported standard statistics, not necessarily one fresh hardware register read per virtual file. Background control traffic may contribute to packet/byte counters. `rx_errors` is an aggregate and is **not synonymous with CRC errors**. `rx_missed_errors` and `rx_dropped` measure different conditions. A receiver-side iperf3 UDP loss report is not a substitute for hardware error counters.
+These are known limitations of the prototype, **not** evidence of hardware loss or throughput.
 
-## Current implementation and verification status
+## Measurement plan
 
-[benchmark.py](benchmark.py) is the **only implemented benchmark source**. The current code includes argument parsing, `psutil` NIC discovery, a proposed namespace setup function, an `iperf3` client/server orchestration outline, two threaded stats pollers, and timestamped `IFLA_STATS64` counter snapshots. This is **implemented source code, not yet validated behavior**.
+Collect application UDP throughput, lost datagrams and jitter; Linux NIC counters such as `tx_packets`, `rx_packets`, `tx_dropped`, `rx_dropped`, `rx_errors`, `rx_crc_errors`, and `rx_missed_errors`; link events; and `ethtool -S` / switch-port counters when available.
 
-### Known blockers at current HEAD
+Counter semantics vary by layer. iperf3 receiver loss is not the same metric as hardware CRC errors or NIC `rx_dropped`. The kernel and NIC may update counters less frequently than polling occurs. Record actual collection timestamps and the offered payload rate versus Ethernet line rate. Integrate physical shaker-table telemetry later for precise mechanical correlation.
 
-1. **Namespace initialization order:** `main` looks up the RX interface inside `rxbench` before creating/moving it, then calls undefined `create_rx_namespace()`. The existing `setup_network()` helper is not invoked.
-2. **Namespace-aware networking:** code uses `IPRoute(netns=...)` rather than a correctly scoped `NetNS` handle. After moving an interface, configuration must occur in its new namespace; interface indices are namespace-local. Setup currently uses /24 prefixes although the design proposes /30 addresses.
-3. **Traffic/report lifecycle:** `launch_server()` starts an `iperf3` process but doesn't check readiness or clean it up. The client subprocess result is not checked before parsing; the parser assumes `end.sum` and several UDP fields exist without handling sender/receiver schemas or errors.
-4. **Statistics reliability:** collection threads start without a first-sample barrier; baseline snapshots may be empty. Missing `IFLA_STATS64` and counters are not handled, and exceptions may leave the threads/server or namespace in an inconsistent state.
-5. **Compatibility and validation:** current summary f-strings require Python 3.12+ syntax; no unit/integration tests, verified physical path, saved result files, or repeatable throughput measurements exist.
+## Stage 1 exit criteria
 
-These are unresolved development issues, **not published performance findings**. Do not run the network-setup prototype on a shared or production host without first reviewing interface ownership, management access, routing, and cleanup.
+- A disposable `veth` test or safe equivalent verifies initialization and the full process/IPC lifecycle.
+- A known switch path is checked physically, not assumed.
+- iperf3 completes, and validated before/after counter samples plus reproducible test settings are saved.
+- Errors and shutdown do not strand the child processes or damage unrelated network configuration.
+- Repeatable tests provide a baseline for [custom raw Ethernet](../02_af_packet/README.md).
 
-### What the current collector is intended to measure
-
-- Two polling threads request `IFLA_STATS64` through Netlink for TX and RX interface counters, rather than directly reading `/sys/class/net/<interface>/statistics/`.
-- The tool intends to compare **counter deltas** over a controlled run and present them beside receiver-side UDP `iperf3` measurements.
-- These observations cover different layers. UDP application loss, driver/NIC `rx_dropped`, CRC errors, and external switch drops are **not interchangeable**; link status alone does not prove traffic passed through the external switch.
-
-## Next implementation checkpoints
-
-1. **Correctness and unit tests:** Resolve the undefined namespace creation call, initialize namespaces/interfaces in the correct order, use `NetNS` for namespace-specific Netlink work, and handle iperf3 failures/JSON schemas.
-2. **Trustworthy statistics:** Add first-sample synchronization, safe per-interface counter collection across namespaces, missing-counter handling, and thread/process cleanup.
-3. **Safe preflight:** Confirm interfaces, namespaces, assigned addresses, link status, selected route, and receiver availability. Add a non-transmitting dry-run.
-4. **Results:** Save configuration + iperf3 sender/receiver data + TX/RX deltas as JSON with timestamps and error status.
-5. **Test coverage:** Unit tests for deltas, counter resets/missing data, subprocess failures, and representative iperf3 JSON responses.
-6. **Hardware integration:** Confirm cables, switch forwarding/VLANs, and subnet approval; verify ARP/ICMP/TX/RX counters across physical ports at low rate.
-7. **Benchmark matrix:** Repeat runs at increasing load and varying UDP payload sizes; then examine reverse/bidirectional traffic and driver/switch-specific counters.
-
-## Definition of done
-
-Phase A is complete when a known TX-to-switch-to-RX physical path is confirmed; the runner reliably produces receiver-side iperf3 measurements and per-NIC counter deltas; failures are reported clearly; results are saved with reproducible settings; and multiple controlled runs can be compared. Achieving 10 Gb/s is a **measurement goal**, not a prerequisite for declaring the test tool functional.
+Once functional, freeze a known Stage 1 revision for future comparisons. More elaborate error recovery or memory/performance optimization can follow observed problems; basic safety and sample correctness cannot.
