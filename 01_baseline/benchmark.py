@@ -30,7 +30,7 @@ class NetworkInterfaceException(Exception):
 # not subject to os jitter (the kernel scheduling a thread slightly late) affecting when it calculates the deadline
 class HighPerformanceTimer:
     def __init__(self, wait_ms):
-        if wait_ms > 0:
+        if wait_ms <= 0:
             raise ValueError(f"wait_ms {wait_ms} must be > 0!")
         self.last_timestamp = time.monotonic_ns() / 1E6
         self.wait_ms = wait_ms
