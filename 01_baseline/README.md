@@ -28,7 +28,7 @@ The existing [`benchmark.py`](benchmark.py) includes:
 - UDP iperf3 client/server orchestration and initial/final interface counter-delta calculation.
 - Events for namespace creation and stream lifecycle.
 
-The directory also includes exploratory C/C++ source and headers. These are scaffolding, **not** a validated custom packet generator. Stages 2–4 are separate future backends; reusable Python code will be extracted into [`common/`](../common/README.md) after Stage 1 works.
+The old, unused C/C++ interface-monitoring prototype, queue, and scheduler were removed from this directory, along with their obsolete root CMake target. **This stage is Python + iperf3 only.** Stages 2–4 are separate future C++ backends; reusable Python code will be extracted into [`common/`](../common/README.md) after Stage 1 works.
 
 ## Requirements and safety
 

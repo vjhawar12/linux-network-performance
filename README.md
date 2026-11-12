@@ -67,11 +67,10 @@ linux-network-performance/
 │   │   └── README.md
 │   └── kernel_tracing/      # Supporting bottleneck analysis
 │       └── README.md
-├── CMakeLists.txt           # Existing experimental C++ scaffold
-└── main.cpp                 # Existing experimental C++ scaffold
+└── README.md                 # Main architecture and stage roadmap
 ```
 
-Stages 2–4 and `common/` currently contain **documentation, not implementations**. The existing `01_baseline/` also has experimental C/C++ files; they are not a finished traffic engine. Future `src/`, `common/python/`, `common/cpp/`, and `tests/` will be added as implementation progresses.
+Stages 2–4 and `common/` currently contain **documentation, not implementations**. Stage 1 contains the Python `benchmark.py` prototype and its documentation; the obsolete C/C++ prototype and root CMake target were removed before Stage 2 development. Stage 2 will introduce its own C++ source and build configuration. Future `src/`, `common/python/`, `common/cpp/`, and `tests/` will be added as implementation progresses.
 
 ## Test topology
 
