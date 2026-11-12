@@ -73,7 +73,7 @@ class NetworkInterface:
         )
     }
     # default namespace is indicated by passing namespace_str = None
-    def __init__(self, intf_name, ip, namespace_str, stat_list):
+    def __init__(self, intf_name, ip, namespace_str, stat_list, namespace_created):
         self.intf_name = intf_name
         self.ip = ip
         self.namespace_str = namespace_str   
@@ -90,6 +90,7 @@ class NetworkInterface:
             "autoneg" : None,
         }
         self.threads = []
+        self.namespace_created = namespace_created
         self._cached_data = dict()
         stat_list = set(stat_list)
         for item in stat_list:
@@ -98,7 +99,7 @@ class NetworkInterface:
             self.telemetry[item] = (time.time(), 0)
         addrs = psutil.net_if_addrs().get(self.intf_name)
         for addr in addrs:
-            if addr is not None and addr.family.name == "AF_LINK":
+            if addr is not None and addr.family.name == "AF_PACKET":
                 self.mac_address = addr.address
         if self.mac_address is None:
             raise NetworkInterfaceException(f"Could not find MAC address for interface '{self.intf_name}'")
@@ -111,6 +112,7 @@ class NetworkInterface:
         if self.namespace_str is not None:
             # creating the network namespace if a custom namespace is specified
             netns.create(self.namespace_str)         
+            self.namespace_created.set()
             with IPRoute() as ipr:
                 # converting names of interfaces into numeric ids
                 indices = ipr.link_lookup(ifname=self.intf_name)
@@ -234,10 +236,6 @@ class NetworkInterface:
         s5 = str(self.snapshot())
         return s1 + s2 + s3 + s4 + s5
 
-    def __del__(self):
-        if self.namespace_str is not None and self.namespace_str in netns.listnetns():
-            netns.remove(self.namespace_str)
-
 """
 why multiprocessing 
 
@@ -273,11 +271,20 @@ class NetworkInterfaceProcess:
         self.namespace = namespace
         self.stat_list = stat_list
         self.conn = conn
+        self.namespace_created = Event()
+        self.stream_started = Event()
+        self.stream_finished = Event()
         NetworkInterfaceProcess.stop_collection.clear()
         NetworkInterfaceProcess.processes.append(
             Process(
                     target=NetworkInterfaceProcess.stream,
-                    args=(intf_name, ip, namespace, stat_list, conn)
+                    args=(intf_name, ip, 
+                          namespace, 
+                          stat_list, conn, 
+                          self.namespace_created, 
+                          self.stream_started,
+                          self.stream_finished
+                    )
             )
         )
 
@@ -295,13 +302,18 @@ class NetworkInterfaceProcess:
     # with static we avoid having to send all the data associated with
     # the self object to the other process 
     @staticmethod
-    def stream(intf_name, ip, namespace, stat_list, conn):
-        intf = NetworkInterface(intf_name, ip, namespace, stat_list)
+    def stream(intf_name, ip, namespace, stat_list, conn, namespace_created, stream_started, stream_finished):
+        intf = NetworkInterface(intf_name, ip, namespace, stat_list, namespace_created)
         timer = HighPerformanceTimer(wait_ms=10)
-        while not NetworkInterfaceProcess.stop_collection.is_set():      
+        _set = False
+        while not NetworkInterfaceProcess.stop_collection.is_set():    
+            if not _set:
+                stream_started.set()
+                _set = True  
             conn.send(intf.snapshot())
             NetworkInterfaceProcess.stop_collection.wait(timer.remaining_ms() / 1000)
-            timer.tick()  
+            timer.tick()
+        stream_finished.set()  
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
@@ -359,13 +371,17 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     while not buffer_rx or not buffer_tx:
         await asyncio.sleep(0.01)
     # Snapshot L2 stats before the stress test using pipes to pass data
+    rx.stream_started.wait()
     initial_l2_rx, _ =  buffer_rx[-1]
+    tx.stream_started.wait()
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
     # generate traffic
     summary = await generate_traffic_async(rx, tx, bitrate, duration)
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
+    rx.stream_finished.wait()
     final_l2_rx, _ = buffer_rx[-1]
+    tx.stream_finished.wait()
     final_l2_tx, end_ms_tx = buffer_tx[-1]
     # calculate deltas
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
@@ -398,6 +414,8 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     rx = NetworkInterfaceProcess(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"], rx_conn_1)
     # calling start to launch the per-interface threads
     NetworkInterfaceProcess.startall()
+    # waiting for the network namespace to be created before running the command
+    rx.namespace_created.wait()
     # using iperf3 to have the server that tracks the packets the client sent and checks how many actually made it to server
     # runs the command in the rxbench namespace specifically
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
@@ -443,8 +461,8 @@ if __name__ == "__main__":
     try:
         # creates the event loop for asyncio with the first coroutine as 'app'
         asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
+        # calling join at the end of the program for cleanup
+        NetworkInterfaceProcess.joinall()
     finally:
         if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
             netns.remove(args.rx_namespace)
-    # calling join at the end of the program for cleanup
-    NetworkInterfaceProcess.joinall()
