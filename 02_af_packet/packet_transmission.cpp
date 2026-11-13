@@ -33,6 +33,7 @@ int intf_idx(const char* intf_name) {
 }
 
 int mac_address_parsing(const std::string& mac_addr_str, std::array<uint8_t, 6>& mac_addr) {
+    if  (mac_addr_str.size() != 17) return 1;
     int parsed = sscanf(
         mac_addr_str.c_str(), 
         "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",  
@@ -46,18 +47,18 @@ int mac_address_parsing(const std::string& mac_addr_str, std::array<uint8_t, 6>&
 }
 
 int main(int argc, char *argv[]) {
-    // opening raw socket
-    int fd = socket(AF_PACKET, SOCK_RAW, 0);
-    if (fd == -1) {
-        // check errno
-        return 1;
-    } 
     if (argc == 5) {
         const char* source_intf_name = argv[1];
         std::array<uint8_t, 6> dest_mac_address = {}; 
         std::array<uint8_t, 6> source_mac_address = {}; 
         if (mac_address_parsing(argv[2], dest_mac_address) == 0) {
             if (mac_address_parsing(argv[3], source_mac_address) == 0) {
+                // opening raw socket
+                int fd = socket(AF_PACKET, SOCK_RAW, 0);
+                if (fd == -1) {
+                    // check errno
+                    return 1;
+                } 
                 int idx = intf_idx(source_intf_name); 
                 char custom_payload[256] = {0}; 
                 size_t len = sizeof(custom_payload); 
@@ -75,13 +76,14 @@ int main(int argc, char *argv[]) {
                 header.ether_shost[3] = source_mac_address[3];
                 header.ether_shost[4] = source_mac_address[4];
                 header.ether_shost[5] = source_mac_address[5];
+                header.ether_type = htons(ETH_P_802_EX1); 
                 if (idx > 0) {
                     sockaddr_ll dest = {};
-                    dest.sll_family = AF_PACKET,
-                    dest.sll_protocol = htons(ETH_P_802_EX1),
-                    dest.sll_ifindex = idx,
-                    dest.sll_hatype = ARPHRD_ETHER,
-                    dest.sll_pkttype = PACKET_HOST, // sll_pkttype makes sense only for the receiving interface
+                    dest.sll_family = AF_PACKET;
+                    dest.sll_protocol = htons(ETH_P_802_EX1);
+                    dest.sll_ifindex = idx;
+                    dest.sll_hatype = 0;
+                    dest.sll_pkttype = 0; // sll_pkttype makes sense only for the receiving interface
                     dest.sll_addr[0] =  dest_mac_address[0];
                     dest.sll_addr[1] =  dest_mac_address[1];
                     dest.sll_addr[2] =  dest_mac_address[2];
@@ -94,15 +96,19 @@ int main(int argc, char *argv[]) {
                     std::memcpy(full_buffer.data(), &header, sizeof(header)); 
                     std::memcpy(full_buffer.data() + sizeof(header), custom_payload, sizeof(custom_payload)); 
                     len = sizeof(full_buffer); 
-                    int ret = sendto(fd, full_buffer.data(), len, MSG_CONFIRM, reinterpret_cast<const sockaddr*>(&dest), socklen); 
+                    int ret = sendto(fd, full_buffer.data(), len, 0, reinterpret_cast<const sockaddr*>(&dest), socklen); 
                     close(fd); 
                     if (ret == -1) {
                         // check errno
+                        close(fd); 
                         return 1;
                     }
                 } else {
+                    close(fd); 
                     return 1;
                 }
+            } else {
+                return 1;
             }
         } else {
             return 1;
