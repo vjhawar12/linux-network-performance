@@ -22,6 +22,8 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <iostream>
 #include <array>
 
+#define MAX_PAYLOAD_LENGTH 256
+
 class MacAddress {
 private:
 std::array<uint8_t, 6> mac_addr = {};
@@ -52,14 +54,14 @@ public:
 class EthernetFrame {
 private:
     ether_header header = {}; 
-    std::array<char, sizeof(header) + 256> full_ethernet_frame = {}; 
+    std::array<char, sizeof(header) + MAX_PAYLOAD_LENGTH> full_ethernet_frame = {}; 
     size_t total_len = 0; 
 public:
     // build the entire ethernet frame with a header and payload
     const size_t payload_len = 0;
     EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, char* custom_payload, size_t len) : payload_len(len) {
-        if (len > 256) {
-            throw std::runtime_error("Payload size must be <= 256"); 
+        if (len > MAX_PAYLOAD_LENGTH) {
+            throw std::runtime_error("Payload size must be <= MAX_PAYLOAD_LENGTH"); 
         }
         total_len = payload_len + sizeof(header); 
         header.ether_dhost[0] = dest_mac_address.get(0);
@@ -181,11 +183,11 @@ int main(int argc, char *argv[]) {
             MacAddress source_mac_address(argv[3]); 
             // opening raw socket
             PacketSocket raw_socket(dest_mac_address, idx); 
-            char custom_payload[256]{};
-            if (strlen(argv[4]) < sizeof(custom_payload)) {
-                memcpy(custom_payload, argv[4], strlen(argv[4])); 
+            char* custom_payload = NULL; 
+            if (strlen(argv[4]) < MAX_PAYLOAD_LENGTH) {
+                custom_payload = argv[4]; 
             } else {
-                std::cerr << "Payload max size " << sizeof(custom_payload) <<  " bytes!" << std::endl;
+                std::cerr << "Payload max size " << MAX_PAYLOAD_LENGTH <<  " bytes!" << std::endl;
                 return 1;
             }
             EthernetFrame frame(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
