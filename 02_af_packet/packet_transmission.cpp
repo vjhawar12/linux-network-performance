@@ -120,9 +120,6 @@ public:
     // which could let a double-close on the same fd happen
     PacketSocket(PacketSocket&& other) noexcept {
         if (this != &other) {
-            if (other.fd >= 0) {
-                close(other.fd); 
-            }
             this->fd = other.fd;
             other.fd = -1;
             std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
@@ -134,8 +131,8 @@ public:
 
     PacketSocket& operator= (PacketSocket&& other) noexcept {
         if (this != &other) {
-            if (other.fd >= 0) {
-                close(other.fd); 
+            if (this->fd >= 0) {
+                close(this->fd); 
             }
             this->fd = other.fd;
             other.fd = -1;
@@ -185,7 +182,7 @@ int main(int argc, char *argv[]) {
             // opening raw socket
             PacketSocket raw_socket(dest_mac_address, idx); 
             char custom_payload[256]{};
-            if (strlen(argv[4]) <= sizeof(custom_payload)) {
+            if (strlen(argv[4]) < sizeof(custom_payload)) {
                 memcpy(custom_payload, argv[4], strlen(argv[4])); 
             } else {
                 std::cerr << "Payload max size " << sizeof(custom_payload) <<  " bytes!" << std::endl;
