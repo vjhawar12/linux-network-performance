@@ -259,6 +259,9 @@ using a single process for multiple interfaces with seperate network namespaces 
 and could get skipped during a netlink error, causing a socket to potentially be opened in the wrong namespace. seperate processes solve this because
 that process has a single namespace so there's no switching
 
+if the physical link drops for one of the ports during vibration testing, then a multithreaded application might involve long blocking calls while the kernel spins for even 50-100 ms potentially causing the deadlines to be missed by hte other threads,
+but having individual processes would make the application more resilient
+
 core pinning is another reason why multiprocessing was chosen, at 40/100G speeds to fully saturate the link, the cpu core has to generate a lot of packets
 and that can overwhelm it, so we'd want to pin certain cores for packet generation exclusively which would require managing multiple processes
 """
