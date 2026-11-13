@@ -115,9 +115,31 @@ public:
     // block copy constructor / assignment operator because that lets double-close on the same fd be possible
     PacketSocket(const PacketSocket& other) = delete;
     PacketSocket& operator= (const PacketSocket& other) = delete;
-    // the move constructor / assignment operator is supported and encouraged however
-    PacketSocket(PacketSocket&& other) = default;
-    PacketSocket& operator= (PacketSocket&& other) = default;
+    // the move constructor / assignment operator is supported 
+    // however the default move constructor / assignment operator won't invalidate the old fd
+    // which could let a double-close on the same fd happen
+    PacketSocket(PacketSocket&& other) {
+        if (this != &other) {
+            this->fd = other.fd;
+            other.fd = -1;
+            std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
+            memset(&other.dest, 0, sizeof(other.dest)); 
+            this->socklen = other.socklen;
+            other.socklen = 0; 
+        }
+    }
+
+    PacketSocket& operator= (PacketSocket&& other) {
+        if (this != &other) {
+            this->fd = other.fd;
+            other.fd = -1;
+            std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
+            memset(&other.dest, 0, sizeof(other.dest)); 
+            this->socklen = other.socklen;
+            other.socklen = 0; 
+        }
+        return *this;
+    }
 
     int get_fd() const {
         return fd;
