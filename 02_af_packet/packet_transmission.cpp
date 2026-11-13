@@ -62,25 +62,19 @@ int main(int argc, char *argv[]) {
                 char custom_payload[256] = {0}; 
                 size_t len = sizeof(custom_payload); 
                 std::strncpy(custom_payload, argv[4], len); 
-                ether_header header = {
-                    .ether_dhost = {
-                        dest_mac_address[0],
-                        dest_mac_address[1],
-                        dest_mac_address[2],
-                        dest_mac_address[3],
-                        dest_mac_address[4],
-                        dest_mac_address[5],
-                    },
-                    .ether_shost = {
-                        source_mac_address[0],
-                        source_mac_address[1],
-                        source_mac_address[2],
-                        source_mac_address[3],
-                        source_mac_address[4],
-                        source_mac_address[5],
-                    },
-                    .ether_type = ETH_P_802_EX1
-                };  
+                ether_header header = {};  
+                header.ether_dhost[0] = dest_mac_address[0];
+                header.ether_dhost[1] = dest_mac_address[1];
+                header.ether_dhost[2] = dest_mac_address[2];
+                header.ether_dhost[3] = dest_mac_address[3];
+                header.ether_dhost[4] = dest_mac_address[4];
+                header.ether_dhost[5] = dest_mac_address[5];
+                header.ether_shost[0] = source_mac_address[0];
+                header.ether_shost[1] = source_mac_address[1];
+                header.ether_shost[2] = source_mac_address[2];
+                header.ether_shost[3] = source_mac_address[3];
+                header.ether_shost[4] = source_mac_address[4];
+                header.ether_shost[5] = source_mac_address[5];
                 if (idx > 0) {
                     sockaddr_ll dest = {};
                     dest.sll_family = AF_PACKET,
@@ -94,8 +88,6 @@ int main(int argc, char *argv[]) {
                     dest.sll_addr[3] =  dest_mac_address[3];
                     dest.sll_addr[4] =  dest_mac_address[4];
                     dest.sll_addr[5] =  dest_mac_address[5];
-                    dest.sll_addr[6] =  dest_mac_address[6];
-                    dest.sll_addr[7] =  dest_mac_address[7];
                     dest.sll_halen = ETH_ALEN; 
                     socklen_t socklen = sizeof(dest); 
                     std::array<char, sizeof(header) + 256> full_buffer; 
