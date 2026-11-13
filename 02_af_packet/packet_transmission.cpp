@@ -118,8 +118,11 @@ public:
     // the move constructor / assignment operator is supported 
     // however the default move constructor / assignment operator won't invalidate the old fd
     // which could let a double-close on the same fd happen
-    PacketSocket(PacketSocket&& other) {
+    PacketSocket(PacketSocket&& other) noexcept {
         if (this != &other) {
+            if (other.fd >= 0) {
+                close(other.fd); 
+            }
             this->fd = other.fd;
             other.fd = -1;
             std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
@@ -129,8 +132,11 @@ public:
         }
     }
 
-    PacketSocket& operator= (PacketSocket&& other) {
+    PacketSocket& operator= (PacketSocket&& other) noexcept {
         if (this != &other) {
+            if (other.fd >= 0) {
+                close(other.fd); 
+            }
             this->fd = other.fd;
             other.fd = -1;
             std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
@@ -154,7 +160,7 @@ public:
     }
 
     ~PacketSocket() {
-        if (fd > 0) {
+        if (fd >= 0) {
             close(fd); 
         }
     }
@@ -178,7 +184,14 @@ int main(int argc, char *argv[]) {
             MacAddress source_mac_address(argv[3]); 
             // opening raw socket
             PacketSocket raw_socket(dest_mac_address, idx); 
-            EthernetFrame frame(source_mac_address, dest_mac_address, argv[4], 256);
+            char custom_payload[256]{};
+            if (strlen(argv[4]) <= sizeof(custom_payload)) {
+                memcpy(custom_payload, argv[4], strlen(argv[4])); 
+            } else {
+                std::cerr << "Payload max size " << sizeof(custom_payload) <<  " bytes!" << std::endl;
+                return 1;
+            }
+            EthernetFrame frame(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
             int ret = sendto(
                 raw_socket.get_fd(), 
                 frame.get(), 
@@ -191,7 +204,7 @@ int main(int argc, char *argv[]) {
                 std::cerr << "sendto failed with errno = " << std::to_string(errno) << std::endl;
                 return 1;
             }
-        } catch (std::runtime_error e) {
+        } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
         }
