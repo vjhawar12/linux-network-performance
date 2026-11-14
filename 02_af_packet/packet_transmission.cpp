@@ -231,37 +231,28 @@ std::vector<NetworkInterface> discover() {
                 break;
             case RTM_NEWLINK:
                 // parse link related information
+                int rem = IFLA_PAYLOAD(nh);
                 ifinfomsg* _ifinfo = static_cast<ifinfomsg*>(NLMSG_DATA(nh)); 
-                bool link_up = _ifinfo->ifi_flags & IFF_LOWER_UP; 
-                rtattr* attr = IFLA_RTA(_ifinfo);
-                int rem = RTA_PAYLOAD(attr); 
-                char* if_name; 
+                rtattr* attr = IFLA_RTA(_ifinfo);  
                 uint8_t* mac; 
-                uint32_t if_idx;
-                uint32_t mtu;
+                NetworkInterface intf;
+                intf.intf_idx = _ifinfo->ifi_index;  
+                intf.link_up = _ifinfo->ifi_flags & IFF_LOWER_UP;
                 for (rtattr* attr = static_cast<rtattr*>(IFLA_RTA(_ifinfo)); RTA_OK(attr, rem); attr = RTA_NEXT(attr, rem)) {
                     switch (attr->rta_type) {
                         case IFLA_IFNAME:
-                            if_name = (char*)RTA_DATA(attr); 
-                            break;
-                        case IFLA_LINK:
-                            if_idx = *(uint32_t*)RTA_DATA(attr); 
+                            intf.intf_name  = (char*)RTA_DATA(attr); 
                             break;
                         case IFLA_ADDRESS:
                             mac = (uint8_t*)RTA_DATA(attr); 
+                            for (int i = 0; i < 6; i++) {
+                                intf.mac[i] = mac[i];
+                            }
                             break;
                         case IFLA_MTU:
-                            mtu = *(uint32_t*)RTA_DATA(attr); 
+                            intf.mtu = *(uint32_t*)RTA_DATA(attr); 
                             break;
                     }
-                }
-                NetworkInterface intf;
-                intf.intf_idx = if_idx;
-                intf.intf_name = if_name;
-                intf.link_up = link_up;
-                intf.mtu = mtu;
-                for (int i = 0; i < 6; i++) {
-                    intf.mac[i] = mac[i];
                 }
                 intf_list.push_back(intf); 
                 break;
