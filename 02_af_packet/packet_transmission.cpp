@@ -11,6 +11,7 @@ as to what is the real upper limit of packet throughput that the switch can hand
 */
 
 #include <cerrno>
+#include <cstdint>
 #include <stdexcept>
 #include <sys/socket.h>
 #include <net/if.h>
@@ -205,7 +206,7 @@ public:
 
     void generate() {
         int ret = 0; 
-        for (int i = 0; i < num_packets; i++) {
+        for (uint64_t i = 0; i < num_packets; i++) {
             ret = sendto(
                 raw_socket.get_fd(), 
                 frame.get(), 
@@ -323,7 +324,7 @@ void print(std::vector<NetworkInterface> intf_list) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc == 5) {
+    if (argc == 6) {
         const char* source_intf_name = argv[1];
         const char* _src_mac = argv[2];
         const char* _dest_mac = argv[3];
@@ -337,9 +338,9 @@ int main(int argc, char *argv[]) {
         }
         int idx = intf_name_to_index(source_intf_name); 
         try {
-            MacAddress dest_mac_address(_src_mac); 
-            MacAddress source_mac_address(_dest_mac); 
-            PacketGenerator<256> gen(source_mac_address, dest_mac_address, idx, payload, 10); 
+            MacAddress dest_mac_address(_dest_mac); 
+            MacAddress source_mac_address(_src_mac); 
+            PacketGenerator<256> gen(source_mac_address, dest_mac_address, idx, payload, num_packets); 
             gen.generate(); 
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
