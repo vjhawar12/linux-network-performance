@@ -28,8 +28,6 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <array>
 #include <vector> 
 
-#define MAX_PAYLOAD_LENGTH 256
-
 class MacAddress {
 private:
 std::array<uint8_t, 6> mac_addr = {};
@@ -57,6 +55,7 @@ public:
     }
 }; 
 
+template<uint16_t MAX_PAYLOAD_LENGTH>
 class EthernetFrame {
 private:
     ether_header header = {}; 
@@ -179,6 +178,35 @@ struct NetworkInterface {
     bool link_up = false;
 }; 
 
+template <uint16_t num_packets, uint16_t packet_size>
+class PacketGenerator {
+private:
+    EthernetFrame<packet_size> frame;
+    PacketSocket raw_socket;  
+public:
+    PacketGenerator(MacAddress source_mac_address, MacAddress dest_mac_address, char* custom_payload)  {
+        frame = EthernetFrame<packet_size>(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
+        raw_socket = PacketSocket(dest_mac_address, idx); 
+    }
+
+    void generate() {
+        int ret = 0; 
+        for (int i = 0; i < num_packets; i++) {
+            ret = sendto(
+                raw_socket.get_fd(), 
+                frame.get(), 
+                frame.length(), 
+                0, 
+                reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
+                raw_socket.get_socklen()
+            ); 
+            if (ret == -1) {
+                throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
+            }
+        }
+    }
+};
+
 int intf_name_to_index(std::string intf_name) {
     int idx = if_nametoindex(intf_name.c_str()); 
     if (idx <= 0) {
@@ -290,13 +318,13 @@ int main(int argc, char *argv[]) {
             // opening raw socket
             PacketSocket raw_socket(dest_mac_address, idx); 
             char* custom_payload = NULL; 
-            if (strlen(argv[4]) < MAX_PAYLOAD_LENGTH) {
+            if (strlen(argv[4]) < 256) {
                 custom_payload = argv[4]; 
             } else {
-                std::cerr << "Payload max size " << MAX_PAYLOAD_LENGTH <<  " bytes!" << std::endl;
+                std::cerr << "Payload max size " << 256 <<  " bytes!" << std::endl;
                 return 1;
             }
-            EthernetFrame frame(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
+            EthernetFrame<256> frame(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
             int ret = sendto(
                 raw_socket.get_fd(), 
                 frame.get(), 
