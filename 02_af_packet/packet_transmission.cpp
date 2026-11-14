@@ -10,13 +10,16 @@ This path is more direct and would let us have greather throughput of packets th
 as to what is the real upper limit of packet throughput that the switch can handle before its packet drop statistics cross a significant amount
 */
 
+#include <stdexcept>
 #include <sys/socket.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <linux/if.h>
 #include <net/ethernet.h> /* the L2 protocols */
 #include <netinet/in.h>
+#include <sys/ioctl.h>
 #include <net/if_arp.h>
 #include <unistd.h>
 #include <string.h>
@@ -168,94 +171,123 @@ public:
     }
 }; 
 
-class NetworkInterface {
+struct NetworkInterface {
     std::string intf_name{};
     size_t intf_idx = 0; 
-    bool link_up;
-    static std::vector<NetworkInterface*> intf_list;
-
-    NetworkInterface(std::string intf_name) {
-        int idx = if_nametoindex(intf_name.c_str()); 
-        if (idx <= 0) {
-            throw std::runtime_error("Invalid interface index: " + std::to_string(idx));
-        }
-        this->intf_name = intf_name;
-        this->intf_idx = idx;
-    }
-
-    NetworkInterface(size_t intf_idx) {
-        if (intf_idx <= 0) {
-            throw std::runtime_error("Invalid interface index: " + std::to_string(intf_idx));
-        }
-        char buf[IF_NAMESIZE]; 
-        char* ifname = if_indextoname(intf_idx, buf); 
-        if (ifname == NULL) {
-            throw std::runtime_error("Invalid interface index: " + std::to_string(intf_idx));
-        }
-        intf_name = ifname; 
-    }
-
-    // send netlink message for interface discovery
-    static void discover() {
-        int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
-        static int seq = 0;
-        nlmsghdr nlhdr = {
-            .nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
-            .nlmsg_type = RTM_GETLINK,
-            .nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
-            .nlmsg_seq = seq++,
-        }; 
-        ifinfomsg msg = {
-            .ifi_family = AF_PACKET,
-        }; 
-        char req[sizeof(nlhdr) + sizeof(msg)]; 
-        memcpy(req, &nlhdr, sizeof(nlhdr)); 
-        memcpy(req + sizeof(nlhdr), &msg, sizeof(msg)); 
-        if (send(fd, &req, nlhdr.nlmsg_len, 0) < 0) {
-            close(fd);
-            throw std::runtime_error("netlink send request failed with errno = " + std::to_string(errno)); 
-        }
-        char buf[sizeof(nlhdr) + sizeof(msg)]; 
-        int len = recv(fd, buf, sizeof(buf), 0);
-        nlmsgerr* err;
-        if (len > 0) {
-            for (nlmsghdr* nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, (unsigned int)len); nh = NLMSG_NEXT(nh, len)) {
-                switch (nh->nlmsg_type) {
-                case NLMSG_ERROR:
-                    err = (struct nlmsgerr *)NLMSG_DATA(nh);
-                    if (err->error) {
-                        close(fd);
-                        throw std::runtime_error("error during message parsing with errno = " + std::to_string(errno)); 
-                    }
-                case NLMSG_DONE:
-                    break;
-                case RTM_GETLINK:
-                    // parse link related information
-                    ifinfomsg* _ifinfo = reinterpret_cast<ifinfomsg*>(NLMSG_NEXT(nh, len)); 
-                    break;
-                }
-            }
-        } else {
-            close(fd);
-            throw std::runtime_error("Error receving messgaes with errno = " + std::to_string(errno)); 
-        }
-        close(fd); 
-    }
-
-    void print() {
-        if (intf_list.size() == 0) {
-            std::cout << "No interfaces found" << std::endl;
-        } else {
-            std::cout << "Listing interfaces..." << std::endl;
-            for (auto it = intf_list.begin(); it != intf_list.end(); it++) {
-                std::cout << "Intf name: " <<  (*it)->intf_name 
-                << " idx: " << (*it)->intf_idx 
-                << " link " << link_up
-                << std::endl;
-            }
-        }
-    }
+    std::array<uint8_t, 8>mac{};
+    unsigned int mtu = 0; 
+    bool link_up = false;
 }; 
+
+int intf_name_to_index(std::string intf_name) {
+    int idx = if_nametoindex(intf_name.c_str()); 
+    if (idx <= 0) {
+        throw std::runtime_error("Invalid interface index: " + std::to_string(idx));
+    }
+    return idx;
+}
+
+void intf_index_to_name(int index, char* buf, size_t len) {
+    if (len < IF_NAMESIZE) {
+        throw std::runtime_error("Buffer must be at least " + std::to_string(IF_NAMESIZE) + " bytes"); 
+    }
+    char* ifname = if_indextoname(index, buf); 
+    if (ifname == NULL) {
+        throw std::runtime_error("Invalid interface index: " + std::to_string(index));
+    }
+}
+
+std::vector<NetworkInterface> discover() {
+    std::vector<NetworkInterface> intf_list;
+    int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    static uint32_t seq = 0;
+    nlmsghdr nlhdr = {}; 
+    nlhdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+    nlhdr.nlmsg_type = RTM_GETLINK;
+    nlhdr.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;
+    nlhdr.nlmsg_seq = seq++;
+    ifinfomsg msg = {};
+    msg.ifi_family = AF_PACKET;
+    char req[sizeof(nlhdr) + sizeof(msg)]; 
+    memcpy(req, &nlhdr, sizeof(nlhdr)); 
+    memcpy(req + sizeof(nlhdr), &msg, sizeof(msg)); 
+    if (send(fd, &req, nlhdr.nlmsg_len, 0) < 0) {
+        close(fd);
+        throw std::runtime_error("netlink send request failed with errno = " + std::to_string(errno)); 
+    }
+    alignas(nlmsghdr) char buf[8192]; 
+    int len = recv(fd, buf, sizeof(buf), 0);
+    nlmsgerr* err;
+    if (len > 0) {
+        for (nlmsghdr* nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, (unsigned int)len); nh = NLMSG_NEXT(nh, len)) {
+            switch (nh->nlmsg_type) {
+            case NLMSG_ERROR:
+                err = (struct nlmsgerr *)NLMSG_DATA(nh);
+                if (err->error) {
+                    close(fd);
+                    throw std::runtime_error("error during message parsing with errno = " + std::to_string(errno)); 
+                }
+            case NLMSG_DONE:
+                break;
+            case RTM_NEWLINK:
+                // parse link related information
+                ifinfomsg* _ifinfo = static_cast<ifinfomsg*>(NLMSG_DATA(nh)); 
+                bool link_up = _ifinfo->ifi_flags & IFF_LOWER_UP; 
+                rtattr* attr = IFLA_RTA(_ifinfo);
+                int rem = RTA_PAYLOAD(attr); 
+                char* if_name; 
+                uint8_t* mac; 
+                uint32_t if_idx;
+                uint32_t mtu;
+                for (rtattr* attr = static_cast<rtattr*>(IFLA_RTA(_ifinfo)); RTA_OK(attr, rem); attr = RTA_NEXT(attr, rem)) {
+                    switch (attr->rta_type) {
+                        case IFLA_IFNAME:
+                            if_name = (char*)RTA_DATA(attr); 
+                            break;
+                        case IFLA_LINK:
+                            if_idx = *(uint32_t*)RTA_DATA(attr); 
+                            break;
+                        case IFLA_ADDRESS:
+                            mac = (uint8_t*)RTA_DATA(attr); 
+                            break;
+                        case IFLA_MTU:
+                            mtu = *(uint32_t*)RTA_DATA(attr); 
+                            break;
+                    }
+                }
+                NetworkInterface intf;
+                intf.intf_idx = if_idx;
+                intf.intf_name = if_name;
+                intf.link_up = link_up;
+                intf.mtu = mtu;
+                for (int i = 0; i < 6; i++) {
+                    intf.mac[i] = mac[i];
+                }
+                intf_list.push_back(intf); 
+                break;
+            }
+        }
+    } else {
+        close(fd);
+        throw std::runtime_error("Error receving messages with errno = " + std::to_string(errno)); 
+    }
+    close(fd); 
+    return intf_list; 
+}
+
+void print(std::vector<NetworkInterface> intf_list) {
+    if (intf_list.size() == 0) {
+        std::cout << "No interfaces found" << std::endl;
+    } else {
+        std::cout << "Listing interfaces..." << std::endl;
+        for (auto it = intf_list.begin(); it != intf_list.end(); it++) {
+            std::cout << "Intf name: " <<  (*it).intf_name 
+            << " idx: " << (*it).intf_idx 
+            << " link " << (*it).link_up
+            << std::endl;
+        }
+    }
+}
 
 int intf_idx(const char* intf_name) {
     int idx = if_nametoindex(intf_name);
