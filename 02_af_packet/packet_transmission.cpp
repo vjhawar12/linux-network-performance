@@ -10,6 +10,7 @@ This path is more direct and would let us have greather throughput of packets th
 as to what is the real upper limit of packet throughput that the switch can handle before its packet drop statistics cross a significant amount
 */
 
+#include <cerrno>
 #include <stdexcept>
 #include <sys/socket.h>
 #include <net/if.h>
@@ -64,7 +65,7 @@ private:
 public:
     // build the entire ethernet frame with a header and payload
     const size_t payload_len = 0;
-    EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, char* custom_payload, size_t len) : payload_len(len) {
+    EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, uint8_t* custom_payload, size_t len) : payload_len(len) {
         if (len > MAX_PAYLOAD_LENGTH) {
             throw std::runtime_error("Payload size must be <= MAX_PAYLOAD_LENGTH"); 
         }
@@ -178,15 +179,28 @@ struct NetworkInterface {
     bool link_up = false;
 }; 
 
-template <uint16_t num_packets, uint16_t packet_size>
+template <uint16_t packet_size>
 class PacketGenerator {
 private:
     EthernetFrame<packet_size> frame;
     PacketSocket raw_socket;  
+    uint64_t num_packets; 
 public:
-    PacketGenerator(MacAddress source_mac_address, MacAddress dest_mac_address, char* custom_payload)  {
-        frame = EthernetFrame<packet_size>(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
-        raw_socket = PacketSocket(dest_mac_address, idx); 
+    PacketGenerator(
+        MacAddress source_mac_address, 
+        MacAddress dest_mac_address, 
+        int intf_idx, 
+        uint8_t* custom_payload,
+        uint64_t num_packets
+    ) : frame(
+        source_mac_address, 
+        dest_mac_address, 
+        custom_payload, 
+        strlen((const char*)custom_payload)
+    ), raw_socket(
+        dest_mac_address, intf_idx
+    ) {
+        this->num_packets = num_packets;  
     }
 
     void generate() {
@@ -311,32 +325,22 @@ void print(std::vector<NetworkInterface> intf_list) {
 int main(int argc, char *argv[]) {
     if (argc == 5) {
         const char* source_intf_name = argv[1];
+        const char* _src_mac = argv[2];
+        const char* _dest_mac = argv[3];
+        uint8_t* payload = (uint8_t*)argv[4];
+        const char* _num_packets = argv[5]; 
+        char* endptr;
+        uint64_t num_packets = strtoul(_num_packets, &endptr, 10);
+        if (errno == ERANGE || endptr == _num_packets) {
+            std::cerr << "Invalid argument for num_packets: " << _num_packets << std::endl;
+            return 1;
+        }
         int idx = intf_name_to_index(source_intf_name); 
         try {
-            MacAddress dest_mac_address(argv[2]); 
-            MacAddress source_mac_address(argv[3]); 
-            // opening raw socket
-            PacketSocket raw_socket(dest_mac_address, idx); 
-            char* custom_payload = NULL; 
-            if (strlen(argv[4]) < 256) {
-                custom_payload = argv[4]; 
-            } else {
-                std::cerr << "Payload max size " << 256 <<  " bytes!" << std::endl;
-                return 1;
-            }
-            EthernetFrame<256> frame(source_mac_address, dest_mac_address, custom_payload, strlen(custom_payload));
-            int ret = sendto(
-                raw_socket.get_fd(), 
-                frame.get(), 
-                frame.length(), 
-                0, 
-                reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
-                raw_socket.get_socklen()
-            ); 
-            if (ret == -1) {
-                std::cerr << "sendto failed with errno = " << std::to_string(errno) << std::endl;
-                return 1;
-            }
+            MacAddress dest_mac_address(_src_mac); 
+            MacAddress source_mac_address(_dest_mac); 
+            PacketGenerator<256> gen(source_mac_address, dest_mac_address, idx, payload, 10); 
+            gen.generate(); 
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
