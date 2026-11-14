@@ -280,19 +280,10 @@ void print(std::vector<NetworkInterface> intf_list) {
     }
 }
 
-int intf_idx(const char* intf_name) {
-    int idx = if_nametoindex(intf_name);
-    if (idx == 0) {
-        std::cerr << "Could not get interface index for " << intf_name << std::endl; 
-        return -1; 
-    }
-    return idx; 
-}
-
 int main(int argc, char *argv[]) {
     if (argc == 5) {
         const char* source_intf_name = argv[1];
-        int idx = intf_idx(source_intf_name); 
+        int idx = intf_name_to_index(source_intf_name); 
         try {
             MacAddress dest_mac_address(argv[2]); 
             MacAddress source_mac_address(argv[3]); 
