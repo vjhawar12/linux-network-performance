@@ -175,7 +175,7 @@ public:
 struct NetworkInterface {
     std::string intf_name{};
     size_t intf_idx = 0; 
-    std::array<uint8_t, 8>mac{};
+    std::array<uint8_t, 6>mac{};
     unsigned int mtu = 0; 
     bool link_up = false;
 }; 
@@ -258,52 +258,56 @@ std::vector<NetworkInterface> discover() {
         close(fd);
         throw std::runtime_error("netlink send request failed with errno = " + std::to_string(errno)); 
     }
+    bool done = false;
     alignas(nlmsghdr) char buf[8192]; 
-    int len = recv(fd, buf, sizeof(buf), 0);
-    nlmsgerr* err;
-    if (len > 0) {
-        for (nlmsghdr* nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, (unsigned int)len); nh = NLMSG_NEXT(nh, len)) {
-            switch (nh->nlmsg_type) {
-            case NLMSG_ERROR:
-                err = (struct nlmsgerr *)NLMSG_DATA(nh);
-                if (err->error) {
-                    close(fd);
-                    throw std::runtime_error("error during message parsing with errno = " + std::to_string(errno)); 
-                }
-            case NLMSG_DONE:
-                break;
-            case RTM_NEWLINK:
-                // parse link related information
-                int rem = IFLA_PAYLOAD(nh);
-                ifinfomsg* _ifinfo = static_cast<ifinfomsg*>(NLMSG_DATA(nh)); 
-                rtattr* attr = IFLA_RTA(_ifinfo);  
-                uint8_t* mac; 
-                NetworkInterface intf;
-                intf.intf_idx = _ifinfo->ifi_index;  
-                intf.link_up = _ifinfo->ifi_flags & IFF_LOWER_UP;
-                for (rtattr* attr = static_cast<rtattr*>(IFLA_RTA(_ifinfo)); RTA_OK(attr, rem); attr = RTA_NEXT(attr, rem)) {
-                    switch (attr->rta_type) {
-                        case IFLA_IFNAME:
-                            intf.intf_name  = (char*)RTA_DATA(attr); 
-                            break;
-                        case IFLA_ADDRESS:
-                            mac = (uint8_t*)RTA_DATA(attr); 
-                            for (int i = 0; i < 6; i++) {
-                                intf.mac[i] = mac[i];
-                            }
-                            break;
-                        case IFLA_MTU:
-                            intf.mtu = *(uint32_t*)RTA_DATA(attr); 
-                            break;
+    while (!done) {
+        int len = recv(fd, buf, sizeof(buf), 0);
+        nlmsgerr* err;
+        if (len > 0) {
+            for (nlmsghdr* nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, (unsigned int)len); nh = NLMSG_NEXT(nh, len)) {
+                switch (nh->nlmsg_type) {
+                case NLMSG_ERROR:
+                    err = (struct nlmsgerr *)NLMSG_DATA(nh);
+                    if (err->error) {
+                        close(fd);
+                        throw std::runtime_error("error during message parsing with errno = " + std::to_string(errno)); 
                     }
+                case NLMSG_DONE:
+                    done = true;
+                    break;
+                case RTM_NEWLINK:
+                    // parse link related information
+                    int rem = IFLA_PAYLOAD(nh);
+                    ifinfomsg* _ifinfo = static_cast<ifinfomsg*>(NLMSG_DATA(nh)); 
+                    rtattr* attr = IFLA_RTA(_ifinfo);  
+                    uint8_t* mac; 
+                    NetworkInterface intf;
+                    intf.intf_idx = _ifinfo->ifi_index;  
+                    intf.link_up = _ifinfo->ifi_flags & IFF_LOWER_UP;
+                    for (rtattr* attr = static_cast<rtattr*>(IFLA_RTA(_ifinfo)); RTA_OK(attr, rem); attr = RTA_NEXT(attr, rem)) {
+                        switch (attr->rta_type) {
+                            case IFLA_IFNAME:
+                                intf.intf_name  = (char*)RTA_DATA(attr); 
+                                break;
+                            case IFLA_ADDRESS:
+                                mac = (uint8_t*)RTA_DATA(attr); 
+                                for (int i = 0; i < 6; i++) {
+                                    intf.mac[i] = mac[i];
+                                }
+                                break;
+                            case IFLA_MTU:
+                                intf.mtu = *(uint32_t*)RTA_DATA(attr); 
+                                break;
+                        }
+                    }
+                    intf_list.push_back(intf); 
+                    break;
                 }
-                intf_list.push_back(intf); 
-                break;
             }
+        } else {
+            close(fd);
+            throw std::runtime_error("Error receving messages with errno = " + std::to_string(errno)); 
         }
-    } else {
-        close(fd);
-        throw std::runtime_error("Error receving messages with errno = " + std::to_string(errno)); 
     }
     close(fd); 
     return intf_list; 
