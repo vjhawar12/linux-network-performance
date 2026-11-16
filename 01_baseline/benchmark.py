@@ -316,7 +316,8 @@ class NetworkInterfaceProcess:
         stream_finished.set()  
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
-    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J", "-P", "4", "-b", "2.5G"]
+    # listens on the other end of the socket and sends packets at the specified rate
+    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J", "-P", "4"]
     # creates a subprocess managed by the os
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -405,6 +406,7 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     print(f"Time: {time_diff_ms}")
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
+    # want tx and rx statistics to be monitored concurrently with asyncio
     monitor_tx = asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file))
     monitor_rx = asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file))
     # print out all the interfaces found on the machine
@@ -416,8 +418,8 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     NetworkInterfaceProcess.startall()
     # waiting for the network namespace to be created before running the command
     rx.namespace_created.wait()
-    # using iperf3 to have the server that tracks the packets the client sent and checks how many actually made it to server
-    # runs the command in the rxbench namespace specifically
+    # creating a process in the rxbench namespace that listens on one end of a network socket 
+    # for a connection and waits for packets to arrive
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
     cmd = subprocess.Popen([
         "ip", "netns", "exec", rx.namespace, 
@@ -432,6 +434,9 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     # need to wait for monitor to finish before app returns and shutdown
     await asyncio.gather(monitor_tx, monitor_rx)
 
+# only want to execute this code if the file is ran directly and not if its imported somewhere else
+# eventually we want to position this as a reusable module for testing which provides relevent functions
+# useful for a custom test harness
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("tx_interface")
@@ -451,8 +456,9 @@ if __name__ == "__main__":
         pass
     with open(args.rx_file, "w") as f:
         pass
-    # create pipes for process to process communication
-    tx_conn_1, tx_conn_2 = Pipe()
+    # create pipes for one-way process-to-process communication on the same machine
+    # internally the kernel creates a FIFO and coordinates access
+    tx_conn_1, tx_conn_2 = Pipe()  
     rx_conn_1, rx_conn_2 = Pipe()
     # create buffers to store snapshots of data 
     buffer_tx = []
