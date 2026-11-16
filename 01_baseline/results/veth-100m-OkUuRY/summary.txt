@@ -1,0 +1,21 @@
+Available Network Interfaces:
+
+Interface name: eth0 Address: [snicaddr(family=<AddressFamily.AF_INET: 2>, address='172.17.254.48', netmask='255.255.240.0', broadcast='172.17.255.255', ptp=None), snicaddr(family=<AddressFamily.AF_INET6: 10>, address='fe80::215:5dff:fef7:5c7f%eth0', netmask='ffff:ffff:ffff:ffff::', broadcast=None, ptp=None), snicaddr(family=<AddressFamily.AF_PACKET: 17>, address='00:15:5d:f7:5c:7f', netmask=None, broadcast='ff:ff:ff:ff:ff:ff', ptp=None)]
+
+=== NIC STATISTICS ===
+RX packets: 915813
+RX bytes: 1364535989
+RX drops: 0
+RX errors: 0
+RX CRC errors: 0
+RX missed: 0
+TX packets: 915468
+TX bytes: 1364021939
+TX drops: 0
+TX errors: 0
+
+=== IPERF3 SUMMARY ===
+Bits per second: 1061698941.9440557
+Loss percent: 0.652929509795579
+Jitter ms: 0.012890878798868695
+Time: 9999.971175000072
