@@ -4,7 +4,7 @@ A staged Linux networking project for **characterizing Ethernet NICs, physical l
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with target rates of **100 Mb/s**, **1 Gb/s**, and **10 Gb/s**. The trials ran inside one Linux host. At a 10 Gb/s aggregate target, iperf3 reported **1.062 Gb/s with one stream** and **2.604 Gb/s with four streams**. The [unpaced ten-stream veth trial](01_baseline/README.md#unpaced-packet-rate) recorded the highest observed average of **about 619,000 TX interface packets/s** over 10 seconds. iperf3 reported **7.189 Gb/s** aggregate UDP bitrate and **34.793%** UDP loss in that trial. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
+> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with target rates of **100 Mb/s**, **1 Gb/s**, and **10 Gb/s**. The trials ran inside one Linux host. At a 10 Gb/s aggregate target, iperf3 reported **1.062 Gb/s with one stream** and **2.604 Gb/s with four streams**. The [unpaced ten-stream veth trials](01_baseline/README.md#unpaced-packet-rate) reached a highest observed average of **about 637,000 TX interface packets/s** over 10 seconds. iperf3 reported **7.387 Gb/s** aggregate UDP bitrate and **35.614%** UDP loss in that trial. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
 
 ## Four-stage packet-I/O roadmap
 
@@ -44,7 +44,7 @@ Supporting tools are **not extra stages**: [kernel pktgen](diagnostics/kernel_pk
 - **Python owns the control plane:** select backends, validate test settings, start/stop processes, supervise readiness and errors, collect telemetry, and compare results across runs.
 - **C++ owns the data path for Stages 2–4:** construct Ethernet frames, pace and batch TX, receive and sequence frames, manage rings/buffers/queues, and expose results/counters.
 - **Integrate at coarse granularity:** C++ executables controlled by Python subprocesses are a straightforward first approach. pybind11 or another native interface may be introduced if justified, but don't call Python once per packet.
-- **Share code incrementally:** keep the existing baseline intact until tested, then extract reused Python orchestration/telemetry and C++ frame definitions into [`common/`](common/README.md). Do not copy the entire Python script for each stage.
+- **Share code incrementally.** Stage 1 has an iperf3 command module and a stage-specific runner. Once Stage 2 exercises its own sender and receiver, move the setup and telemetry code both stages use into [`common/`](common/README.md).
 - **Use backend-aware telemetry:** Linux rtnetlink works for conventional interfaces but may not expose NICs controlled through some DPDK PMDs; later engines must expose appropriate native statistics.
 
 ## Repository layout
@@ -52,12 +52,13 @@ Supporting tools are **not extra stages**: [kernel pktgen](diagnostics/kernel_pk
 ```text
 linux-network-performance/
 ├── 01_baseline/             # Python + iperf3 baseline
-│   ├── benchmark.py
+│   ├── common_test_harness.py
+│   ├── packet_generation.py
 │   ├── run.sh
 │   ├── results/             # Published veth runs
 │   └── README.md
 ├── 02_af_packet/            # Experimental C++ raw Ethernet
-│   ├── packet_transmission.cpp
+│   ├── packet_generation.cpp
 │   └── README.md
 ├── 03_af_xdp/               # Planned C++ AF_XDP
 │   └── README.md
@@ -75,7 +76,7 @@ linux-network-performance/
 └── README.md                 # Main architecture and stage roadmap
 ```
 
-The [Stage 1 README](01_baseline/README.md) has the veth quick start, measured results, and links to the raw captures. The [Stage 2 README](02_af_packet/README.md) describes the current transmitter and its validation status. Stages 3–4 and `common/` document the planned designs.
+The Stage 1 runner handles setup, telemetry, and reporting in [`common_test_harness.py`](01_baseline/common_test_harness.py). Its [`packet_generation.py`](01_baseline/packet_generation.py) launches the iperf3 server and builds the client command. The [Stage 1 README](01_baseline/README.md) has the veth quick start and raw captures. The [Stage 2 README](02_af_packet/README.md) describes the current transmitter and its validation status. Stages 3–4 and `common/` document the planned designs.
 
 ## Planned physical switch test topology
 
