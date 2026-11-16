@@ -1,25 +1,28 @@
 # Stage 1 — Python + iperf3 Baseline
 
-**Status (16 November 2026).** The Python runner completed a 100 Mb/s UDP smoke test over a Linux veth pair. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
+**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at 100 Mb/s and 1 Gb/s UDP target rates. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
-## 100 Mb/s veth smoke test
+## Virtual Ethernet smoke tests
 
-The iperf3 client sends from `veth-tx02` in the host's default network namespace to its peer `veth-rx02` in `rxbench-veth-02`. The run used Python 3.12, a 100 Mb/s UDP target rate, and a 10 s test duration.
+Both trials ran on one Linux host. The iperf3 client sent from `veth-tx02` in the default network namespace to its virtual peer `veth-rx02` in `rxbench-veth-02`. The veth pair forwards traffic inside the Linux kernel. The traffic path used no physical NIC, PHY, cable, or external switch. Each trial used Python 3.12 and a 10 s test duration.
 
-| Metric | Observed |
-| --- | ---: |
-| iperf3 reported UDP bitrate | 99.995 Mb/s |
-| iperf3 reported UDP loss | 0.126% |
-| iperf3 reported UDP jitter | 0.130 ms |
-| Interface drops and errors | 0 reported on TX and RX |
-| Median gap between logged snapshots | 10.002 ms TX / 9.999 ms RX |
-| Longest gap between logged snapshots | 63.932 ms TX / 62.982 ms RX |
+| Metric | 100 Mb/s UDP target | 1 Gb/s UDP target |
+| --- | ---: | ---: |
+| iperf3 reported UDP bitrate | 99.995 Mb/s | 979.982 Mb/s |
+| iperf3 reported UDP loss | 0.126% | 0.316% |
+| iperf3 reported UDP jitter | 0.130 ms | 0.022 ms |
+| Interface drops and errors | 0 reported on TX and RX | 0 reported on TX and RX |
+| Median gap between logged snapshots (TX / RX) | 10.002 / 9.999 ms | 10.000 / 10.000 ms |
+| Longest gap between logged snapshots (TX / RX) | 63.932 / 62.982 ms | 34.962 / 38.537 ms |
 
-Bitrate, loss, jitter, and interface counters come from the [terminal summary](results/veth-100m-xSc6uQ/summary.txt). Snapshot gaps are calculated from adjacent timestamps in the [TX log](results/veth-100m-xSc6uQ/tx.txt) and [RX log](results/veth-100m-xSc6uQ/rx.txt). The script reads iperf3's `end.sum` field. UDP loss measures datagram delivery to the application, while the interface counters report Linux device statistics. The TX and RX snapshots have independent time boundaries, so the packet-total difference cannot quantify UDP loss. These measurements cover the virtual Linux path for one trial.
+Bitrate, loss, jitter, and interface counters come from the terminal summaries. Snapshot gaps use adjacent timestamps in the TX and RX logs. The script reads iperf3's `end.sum` field. UDP loss measures datagram delivery to the application, while the interface counters report Linux device statistics. The TX and RX snapshots have independent time boundaries, so the packet-total difference cannot quantify UDP loss.
 
-![Terminal summary and RX counter log for the 100 Mb/s veth run](../screenshots/01_baseline_100MBs.png)
+| UDP target | Terminal summary | Counter logs | Screenshot |
+| --- | --- | --- | --- |
+| 100 Mb/s | [Summary](results/veth-100m-xSc6uQ/summary.txt) | [TX](results/veth-100m-xSc6uQ/tx.txt) · [RX](results/veth-100m-xSc6uQ/rx.txt) | [100 Mb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_100_mbps.png) |
+| 1 Gb/s | [Summary](results/veth-100m-2Nskcn/summary.txt) | [TX](results/veth-100m-2Nskcn/tx.txt) · [RX](results/veth-100m-2Nskcn/rx.txt) | [1 Gb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_1_gbps.png) |
 
-### Reproduce the run
+### Reproduce the smoke tests
 
 Install Python 3.12 with venv support, `iperf3`, and `iproute2` on a Linux host. The launcher uses `sudo` to create the veth pair and configure the RX namespace. From the repository root:
 
@@ -32,11 +35,11 @@ python3.12 -m venv .venv312
 
 [`run.sh`](run.sh) uses fixed interface names and the `172.31.251.0/24` test subnet. It removes leftover interfaces with those names and recreates the named RX namespace, so reserve the names for this test and run one instance at a time. Python 3.12's Linux `fork` default lets workers inherit the current script's stop event. Python 3.14's `forkserver` default requires passing that event explicitly to the workers.
 
-Each run creates `results/veth-100m-*/` with `summary.txt`, `tx.txt`, and `rx.txt`. The launcher prints a `tail -F` command to follow the logs from a second terminal. The monitor writes batches about once per second.
+The checked-in launcher uses `--bitrate 1G --duration 10`. Set `--bitrate 100M` in `run.sh` to reproduce the 100 Mb/s trial. Both runs use the launcher's `results/veth-100m-*/` directory prefix and write `summary.txt`, `tx.txt`, and `rx.txt`. The launcher prints a `tail -F` command to follow the logs in batches about once per second.
 
 ## Planned physical 10 GbE test
 
-The next hardware experiment measures traffic, drops, errors, and timing through two physical NIC ports connected by an external switch.
+The first planned hardware experiment will measure traffic, drops, errors, and timing through two physical NIC ports connected by an external switch.
 
 ```text
 Linux host / default netns         Same host / rxbench netns
@@ -103,7 +106,7 @@ Counter semantics vary by layer. iperf3 receiver loss is not the same metric as 
 
 ## Stage 1 exit criteria
 
-- The 100 Mb/s veth run has a completed summary and TX/RX logs. Repeat at higher rates and check startup, error handling, and shutdown across runs.
+- The 100 Mb/s and 1 Gb/s veth smoke tests have summaries and TX/RX logs. Repeat the trials and check startup, error handling, and shutdown across runs.
 - A known switch path is checked physically, not assumed.
 - iperf3 completes, and validated before/after counter samples plus reproducible test settings are saved.
 - Errors and shutdown do not strand the child processes or damage unrelated network configuration.

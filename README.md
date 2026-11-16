@@ -4,13 +4,13 @@ A staged Linux networking project for **characterizing Ethernet NICs, physical l
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-> **Status (16 November 2026).** Stage 1 completed a [100 Mb/s UDP smoke test over a Linux veth pair](01_baseline/README.md#100-mbs-veth-smoke-test). The run produced an iperf3 summary and TX/RX counter logs. Stage 2 has an experimental C++ AF_PACKET transmitter. Physical-switch benchmarking and Stages 3–4 are planned.
+> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with target rates of **100 Mb/s** and **1 Gb/s**. Both ran entirely within one Linux host. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
 
 ## Four-stage packet-I/O roadmap
 
 | Stage | Directory | Traffic mechanism | Core engineering question | Target experiment |
 | --- | --- | --- | --- | --- |
-| **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | 100 Mb/s veth smoke test complete. Physical 10 GbE planned. |
+| **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | Virtual smoke tests at 100 Mb/s and 1 Gb/s. Physical 10 GbE planned. |
 | **2. Raw Ethernet** | [`02_af_packet/`](02_af_packet/README.md) | C++ sender/receiver using `AF_PACKET` | What changes when we control L2 frames and packet batching? | Compare on 10 GbE |
 | **3. AF_XDP** | [`03_af_xdp/`](03_af_xdp/README.md) | C++ AF_XDP rings and UMEM | Does ring-based I/O and supported zero-copy improve packet-rate/CPU efficiency? | Explore 10–40 GbE |
 | **4. DPDK** | [`04_dpdk/`](04_dpdk/README.md) | C++ DPDK Ethernet engine | How do multi-queue, multicore, NUMA, and NIC capabilities scale? | Long-term 100–400 GbE |
@@ -70,13 +70,14 @@ linux-network-performance/
 │   │   └── README.md
 │   └── kernel_tracing/      # Supporting bottleneck analysis
 │       └── README.md
-├── screenshots/            # Benchmark screenshots
+├── screenshots/
+│   └── veth-smoke-tests/   # Terminal captures from virtual Ethernet runs
 └── README.md                 # Main architecture and stage roadmap
 ```
 
 The [Stage 1 README](01_baseline/README.md) has the veth quick start, measured results, and links to the raw capture. The [Stage 2 README](02_af_packet/README.md) describes the current transmitter and its validation status. Stages 3–4 and `common/` document the planned designs.
 
-## Test topology
+## Planned physical switch test topology
 
 ```text
                    One Linux host
@@ -106,7 +107,7 @@ A receiving application seeing missing packets does **not** prove the switch dro
 
 ## Current priorities
 
-1. **Extend the Stage 1 software baseline.** Validate the counter boundaries and repeat the veth runs at 100 Mb/s, 500 Mb/s, and 1 Gb/s.
+1. **Extend the Stage 1 software baseline.** Validate the counter boundaries, repeat the 100 Mb/s and 1 Gb/s veth runs, and add a 500 Mb/s trial.
 2. **Test on physical 10 GbE:** confirm switch forwarding and baseline throughput/loss/NIC counters before claims about hardware behavior.
 3. **Validate Stage 2.** Check repeated AF_PACKET transmission, then add receiver-side accounting for comparison with the iperf3 baseline.
 4. **Profile before escalating:** advance to AF_XDP and DPDK where the NIC supports them and measurements justify the complexity. Use diagnostic tools as needed.
