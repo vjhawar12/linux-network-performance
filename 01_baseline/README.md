@@ -22,10 +22,10 @@ iperf3 estimates UDP loss from sequence gaps at the receiving application. The L
 
 | Aggregate UDP target and stream count | Terminal summary | Counter logs | Screenshot |
 | --- | --- | --- | --- |
-| 100 Mb/s, 1 stream | [Summary](results/veth-100m-xSc6uQ/summary.txt) | [TX](results/veth-100m-xSc6uQ/tx.txt) · [RX](results/veth-100m-xSc6uQ/rx.txt) | [100 Mb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_100_mbps.png) |
-| 1 Gb/s, 1 stream | [Summary](results/veth-100m-2Nskcn/summary.txt) | [TX](results/veth-100m-2Nskcn/tx.txt) · [RX](results/veth-100m-2Nskcn/rx.txt) | [1 Gb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_1_gbps.png) |
-| 10 Gb/s, 1 stream | [Summary](results/veth-100m-OkUuRY/summary.txt) | [TX](results/veth-100m-OkUuRY/tx.txt) · [RX](results/veth-100m-OkUuRY/rx.txt) | [Single-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps.png) |
-| 10 Gb/s, 4 streams | [Summary](results/veth-100m-bhSa5l/summary.txt) | [TX](results/veth-100m-bhSa5l/tx.txt) · [RX](results/veth-100m-bhSa5l/rx.txt) | [Four-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps_perstream.png) |
+| 100 Mb/s, 1 stream | [Summary](results/veth-100mbps-target-1-stream/summary.txt) | [TX](results/veth-100mbps-target-1-stream/tx.txt) · [RX](results/veth-100mbps-target-1-stream/rx.txt) | [100 Mb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_100_mbps.png) |
+| 1 Gb/s, 1 stream | [Summary](results/veth-1gbps-target-1-stream/summary.txt) | [TX](results/veth-1gbps-target-1-stream/tx.txt) · [RX](results/veth-1gbps-target-1-stream/rx.txt) | [1 Gb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_1_gbps.png) |
+| 10 Gb/s, 1 stream | [Summary](results/veth-10gbps-target-1-stream/summary.txt) | [TX](results/veth-10gbps-target-1-stream/tx.txt) · [RX](results/veth-10gbps-target-1-stream/rx.txt) | [Single-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps.png) |
+| 10 Gb/s, 4 streams | [Summary](results/veth-10gbps-target-4-streams/summary.txt) | [TX](results/veth-10gbps-target-4-streams/tx.txt) · [RX](results/veth-10gbps-target-4-streams/rx.txt) | [Four-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps_perstream.png) |
 
 ### Reproduce the four-stream smoke test
 
@@ -44,7 +44,7 @@ The checked-in launcher passes `--bitrate 10G --duration 10` to `benchmark.py`. 
 
 Use the [single-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/8a3e6ba3cca71654b0b73b0365a4bbfa957239e9/01_baseline) for the original comparison. In that revision, `--bitrate 10G`, `1G`, or `100M` in `run.sh` sets the single-stream target.
 
-The launcher uses the `results/veth-100m-*/` directory prefix for every rate and writes `summary.txt`, `tx.txt`, and `rx.txt`. It prints a `tail -F` command to follow the logs in batches about once per second.
+The launcher creates a fresh `results/veth-100m-*/` directory for each run and writes `summary.txt`, `tx.txt`, and `rx.txt`. The published folders above are named by aggregate UDP target and stream count. It prints a `tail -F` command to follow the logs in batches about once per second.
 
 ## Planned physical 10 GbE test
 
