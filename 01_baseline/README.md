@@ -1,26 +1,29 @@
 # Stage 1 — Python + iperf3 Baseline
 
-**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at 100 Mb/s and 1 Gb/s UDP target rates. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
+**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at 100 Mb/s, 1 Gb/s, and 10 Gb/s UDP target rates. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
 ## Virtual Ethernet smoke tests
 
-Both trials ran on one Linux host. The iperf3 client sent from `veth-tx02` in the default network namespace to its virtual peer `veth-rx02` in `rxbench-veth-02`. The veth pair forwards traffic inside the Linux kernel. The traffic path used no physical NIC, PHY, cable, or external switch. Each trial used Python 3.12 and a 10 s test duration.
+All three trials ran on one Linux host. The iperf3 client sent from `veth-tx02` in the default network namespace to its virtual peer `veth-rx02` in `rxbench-veth-02`. The veth pair forwards traffic inside the Linux kernel. The traffic path used no physical NIC, PHY, cable, or external switch. Each trial used Python 3.12 and a 10 s test duration.
 
-| Metric | 100 Mb/s UDP target | 1 Gb/s UDP target |
-| --- | ---: | ---: |
-| iperf3 reported UDP bitrate | 99.995 Mb/s | 979.982 Mb/s |
-| iperf3 reported UDP loss | 0.126% | 0.316% |
-| iperf3 reported UDP jitter | 0.130 ms | 0.022 ms |
-| Interface drops and errors | 0 reported on TX and RX | 0 reported on TX and RX |
-| Median gap between logged snapshots (TX / RX) | 10.002 / 9.999 ms | 10.000 / 10.000 ms |
-| Longest gap between logged snapshots (TX / RX) | 63.932 / 62.982 ms | 34.962 / 38.537 ms |
+| Metric | 100 Mb/s UDP target | 1 Gb/s UDP target | 10 Gb/s UDP target |
+| --- | ---: | ---: | ---: |
+| iperf3 reported UDP bitrate | 99.995 Mb/s | 979.982 Mb/s | 1,061.699 Mb/s |
+| iperf3 reported UDP loss | 0.126% | 0.316% | 0.653% |
+| iperf3 reported UDP jitter | 0.130 ms | 0.022 ms | 0.013 ms |
+| Interface drops and errors | 0 reported on TX and RX | 0 reported on TX and RX | 0 reported on TX and RX |
+| Median gap between logged snapshots (TX / RX) | 10.002 / 9.999 ms | 10.000 / 10.000 ms | 9.999 / 10.000 ms |
+| Longest gap between logged snapshots (TX / RX) | 63.932 / 62.982 ms | 34.962 / 38.537 ms | 32.290 / 34.122 ms |
 
-Bitrate, loss, jitter, and interface counters come from the terminal summaries. Snapshot gaps use adjacent timestamps in the TX and RX logs. The script reads iperf3's `end.sum` field. UDP loss measures datagram delivery to the application, while the interface counters report Linux device statistics. The TX and RX snapshots have independent time boundaries, so the packet-total difference cannot quantify UDP loss.
+Bitrate, loss, jitter, and interface counters come from the terminal summaries. The script reads iperf3's `end.sum` field, and snapshot gaps use adjacent timestamps in the TX and RX logs. The 10 Gb/s target produced about 1.062 Gb/s in this run. The capture does not identify what limited the achieved rate.
+
+iperf3 estimates UDP loss from sequence gaps at the receiving application. The Linux `tx_dropped` and `rx_dropped` counters track drops at the interfaces. A datagram can reach the RX interface and be discarded later if the UDP socket's receive buffer is full. The captures contain no UDP socket counters, so the loss location is unknown. The independent TX and RX snapshot boundaries also make the packet-total difference unsuitable for loss accounting. On a rerun, compare `UdpRcvbufErrors` before and after the test in the RX namespace, before the launcher removes it. [iperf3 UDP loss accounting](https://github.com/esnet/iperf/discussions/1680) · [Linux interface counter definitions](https://docs.kernel.org/networking/statistics.html#struct-rtnl-link-stats64)
 
 | UDP target | Terminal summary | Counter logs | Screenshot |
 | --- | --- | --- | --- |
 | 100 Mb/s | [Summary](results/veth-100m-xSc6uQ/summary.txt) | [TX](results/veth-100m-xSc6uQ/tx.txt) · [RX](results/veth-100m-xSc6uQ/rx.txt) | [100 Mb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_100_mbps.png) |
 | 1 Gb/s | [Summary](results/veth-100m-2Nskcn/summary.txt) | [TX](results/veth-100m-2Nskcn/tx.txt) · [RX](results/veth-100m-2Nskcn/rx.txt) | [1 Gb/s veth smoke test](../screenshots/veth-smoke-tests/01_baseline_1_gbps.png) |
+| 10 Gb/s | [Summary](results/veth-100m-OkUuRY/summary.txt) | [TX](results/veth-100m-OkUuRY/tx.txt) · [RX](results/veth-100m-OkUuRY/rx.txt) | [10 Gb/s target veth smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps.png) |
 
 ### Reproduce the smoke tests
 
@@ -35,7 +38,7 @@ python3.12 -m venv .venv312
 
 [`run.sh`](run.sh) uses fixed interface names and the `172.31.251.0/24` test subnet. It removes leftover interfaces with those names and recreates the named RX namespace, so reserve the names for this test and run one instance at a time. Python 3.12's Linux `fork` default lets workers inherit the current script's stop event. Python 3.14's `forkserver` default requires passing that event explicitly to the workers.
 
-The checked-in launcher uses `--bitrate 1G --duration 10`. Set `--bitrate 100M` in `run.sh` to reproduce the 100 Mb/s trial. Both runs use the launcher's `results/veth-100m-*/` directory prefix and write `summary.txt`, `tx.txt`, and `rx.txt`. The launcher prints a `tail -F` command to follow the logs in batches about once per second.
+The checked-in launcher uses `--bitrate 10G --duration 10`. Set `--bitrate 100M` or `--bitrate 1G` in `run.sh` for the lower-rate trials. All three runs use the launcher's `results/veth-100m-*/` directory prefix and write `summary.txt`, `tx.txt`, and `rx.txt`. The launcher prints a `tail -F` command to follow the logs in batches about once per second.
 
 ## Planned physical 10 GbE test
 
@@ -106,7 +109,7 @@ Counter semantics vary by layer. iperf3 receiver loss is not the same metric as 
 
 ## Stage 1 exit criteria
 
-- The 100 Mb/s and 1 Gb/s veth smoke tests have summaries and TX/RX logs. Repeat the trials and check startup, error handling, and shutdown across runs.
+- The 100 Mb/s, 1 Gb/s, and 10 Gb/s target veth smoke tests have summaries and TX/RX logs. Repeat the trials and check startup, error handling, and shutdown across runs.
 - A known switch path is checked physically, not assumed.
 - iperf3 completes, and validated before/after counter samples plus reproducible test settings are saved.
 - Errors and shutdown do not strand the child processes or damage unrelated network configuration.
