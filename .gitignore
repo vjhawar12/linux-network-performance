@@ -21,8 +21,6 @@ env/
 .DS_Store
 
 # Generated benchmark output and packet captures
-results/
-captures/
 *.pcap
 *.pcapng
 *.log
@@ -34,3 +32,5 @@ perf.data*
 # my notes
 
 notes.txt
+
+.venv312/

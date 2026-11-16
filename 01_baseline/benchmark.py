@@ -5,11 +5,12 @@ import os
 import argparse
 import json
 import time
-from pyroute2 import IPRoute, RTMGRP_LINK, netns
+from pyroute2 import IPRoute, netns, IPRSocket
+from pyroute2.netlink.rtnl import RTMGRP_LINK
 import threading
 from multiprocessing import Process, Event, Pipe
 import asyncio
-
+from select import select
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
 and inspecting packet drop statistics for Layer 2. The machine has 2 NICs which are being used as interface 1 and 2. 
@@ -155,28 +156,22 @@ class NetworkInterface:
 
     # eventually we want to implement link status down => stop polling for counters, for now we just capture link status and report it
     def listen_link_status(self):
-        # event driven architecture to have thread update link status only when kernel sends a multicast message 
-        # with a link status event, therefore avoiding unneccessary polling of link status
-        with (IPRoute(netns=self.namespace_str) if self.namespace_str else IPRoute()) as ipr:
-            # socket is listening for link messages specifically rather than everything
-            ipr.bind(RTMGRP_LINK)
-            # have the socket wake up every 5s so that its not sleeping for a long time during when stop_collection was set
-            ipr.nl_socket.settimeout(5.0)  
-            # waits on the same Event as poll_counters, can seperate the two later if needed
+        with IPRSocket(netns=self.namespace_str, groups=RTMGRP_LINK) as ipr:
+            ipr.bind()
             while not NetworkInterfaceProcess.stop_collection.is_set():
-                try:
-                    # get is a blocking method that returns netlink messages via kernel system calls
-                    # it might throw timeout error if no message received because of settimeout from above, verify that though
-                    msg = ipr.get() 
-                    self._cached_data = msg[0]
-                    # filtering by interface index to avoid parsing the wrong one
-                    if self._cached_data['index'] != self.intf_idx:
+                readable, _, _ = select([ipr], [], [], 0.25)
+                if not readable:
+                    continue
+
+                for msg in ipr.get():
+                    if msg.get("event") != "RTM_NEWLINK":
                         continue
-                    for attrs in self._cached_data['attrs']:
-                        if attrs[0] == 'IFLA_OPERSTATE':
-                            self.link["up"] = attrs[1]
-                except TimeoutError:
-                    pass
+                    if msg.get("index") != self.intf_idx:
+                        continue
+                    for attr in msg.get("attrs", ()):
+                        if attr[0] == "IFLA_OPERSTATE":
+                            self.link["up"] = attr[1]
+                            break
                 
     @staticmethod
     def discover_interfaces(wired_prefixes=('eth', 'en', 'em', 'br', 'lan'), wireless_prefixes=('wlan', 'wlp', 'wifi', 'wlan')):
