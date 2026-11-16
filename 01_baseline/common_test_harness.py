@@ -11,6 +11,8 @@ import threading
 from multiprocessing import Process, Event, Pipe
 import asyncio
 from select import select
+import packet_generation
+
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
 and inspecting packet drop statistics for Layer 2. The machine has 2 NICs which are being used as interface 1 and 2. 
@@ -317,7 +319,7 @@ class NetworkInterfaceProcess:
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     # listens on the other end of the socket and sends packets at the specified rate
-    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J", "-P", "10"]
+    cmd = packet_generation.receive_packets(rx.ip, tx.ip, tx.intf_name, bitrate, duration)
     # creates a subprocess managed by the os
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -421,14 +423,7 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     # creating a process in the rxbench namespace that listens on one end of a network socket 
     # for a connection and waits for packets to arrive
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
-    cmd = subprocess.Popen([
-        "ip", "netns", "exec", rx.namespace, 
-        "iperf3", "-s", "-1", "-B", rx.ip
-        ], 
-        stdout=subprocess.DEVNULL, 
-        stderr=subprocess.PIPE, 
-        text=True
-    )
+    packet_generation.packet_gen(rx.namespace, rx.ip)
     # running the iperf3 test to measure packet drop
     await run_test(rx, tx, args.bitrate, args.duration, buffer_tx, buffer_rx)
     # need to wait for monitor to finish before app returns and shutdown

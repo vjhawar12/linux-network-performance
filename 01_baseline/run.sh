@@ -38,7 +38,7 @@ run_dir=$(mktemp -d results/veth-100m-XXXXXX)
 printf 'Saving results to %s\n' "$run_dir"
 printf 'Live watch: tail -n +1 -F %q %q\n' "$PWD/$run_dir/tx.txt" "$PWD/$run_dir/rx.txt"
 
-sudo .venv312/bin/python3 benchmark.py "$TX_IF" "$RX_IF" \
+sudo .venv312/bin/python3 common_test_harness.py "$TX_IF" "$RX_IF" \
   --rx-namespace "$RX_NS" \
   --tx-ip 172.31.251.1 --rx-ip 172.31.251.2 \
   --bitrate 0 --duration 10 \
