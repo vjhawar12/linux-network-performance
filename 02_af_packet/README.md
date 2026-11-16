@@ -1,6 +1,6 @@
 # Stage 2 — C++ AF_PACKET Raw Ethernet
 
-**Status (14 November 2026): transmitter implemented; repeated-transmission validation in progress.** The source is [`packet_transmission.cpp`](packet_transmission.cpp). An earlier version of the raw-socket sender successfully transmitted an experimental Ethernet frame across a WSL2 `veth` pair, verified with `tcpdump`. The newer `PacketGenerator` send loop and the Netlink discovery function are present in source but have **not yet been independently validated end-to-end**. There is no native receive engine or measured throughput/loss report yet.
+**Status (14 November 2026): transmitter implemented; repeated-transmission validation in progress.** The source is [`packet_generation.cpp`](packet_generation.cpp). An earlier version of the raw-socket sender successfully transmitted an experimental Ethernet frame across a WSL2 `veth` pair, verified with `tcpdump`. The newer `PacketGenerator` send loop and the Netlink discovery function are present in source but have **not yet been independently validated end-to-end**. There is no native receive engine or measured throughput/loss report yet.
 
 [Main roadmap](../README.md) · [Stage 1](../01_baseline/README.md) · [Shared design](../common/README.md)
 
@@ -42,7 +42,7 @@ From the repository root:
 
 ```bash
 g++ -std=c++17 -O2 -Wall -Wextra \
-    02_af_packet/packet_transmission.cpp -o packet_sender
+    02_af_packet/packet_generation.cpp -o packet_sender
 ```
 
 Create an isolated local pair for a functional test (skip creation if these interfaces already exist):

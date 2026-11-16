@@ -1,6 +1,6 @@
 # Shared Architecture — Python Control Plane and C++ Traffic Engines
 
-**Status: planned.** Stage 1 currently keeps its code in [`01_baseline/`](../01_baseline/README.md). Extract shared code only after that baseline is functionally tested, and only where multiple stages actually reuse it.
+**Status.** Stage 1 now has a [test runner](../01_baseline/common_test_harness.py) for setup, telemetry, client execution, and reporting, plus an [iperf3 module](../01_baseline/packet_generation.py) for server launch and client command construction. Both live in Stage 1. A shared runner is planned once Stage 2 has exercised its own send and receive path.
 
 ## Responsibility split
 
