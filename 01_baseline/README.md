@@ -1,6 +1,6 @@
 # Stage 1 — Python + iperf3 Baseline
 
-**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
+**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
 ## Virtual Ethernet smoke tests
 
@@ -27,6 +27,18 @@ iperf3 estimates UDP loss from sequence gaps at the receiving application. The L
 | 10 Gb/s, 1 stream | [Summary](results/veth-10gbps-target-1-stream/summary.txt) | [TX](results/veth-10gbps-target-1-stream/tx.txt) · [RX](results/veth-10gbps-target-1-stream/rx.txt) | [Single-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps.png) |
 | 10 Gb/s, 4 streams | [Summary](results/veth-10gbps-target-4-streams/summary.txt) | [TX](results/veth-10gbps-target-4-streams/tx.txt) · [RX](results/veth-10gbps-target-4-streams/rx.txt) | [Four-stream smoke test](../screenshots/veth-smoke-tests/01_baseline_10gbps_perstream.png) |
 
+### Paced ten-stream trial
+
+One 10-second veth run used `-P 10 -b 300M`, for a 3 Gb/s aggregate UDP target. iperf3 applies `-b` per stream. [iperf3 options](https://software.es.net/iperf/invoking.html)
+
+| Aggregate UDP target | iperf3 reported aggregate UDP bitrate | UDP loss | UDP jitter | Average TX interface packets/s | Captures |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 3 Gb/s | 2,999.495 Mb/s | 1.860% | 0.039 ms | 258,394 | [Summary](results/veth-100m-SZIjTQ/summary.txt) · [TX](results/veth-100m-SZIjTQ/tx.txt) · [RX](results/veth-100m-SZIjTQ/rx.txt) |
+
+The reported bitrate was **99.98% of the target**. Linux counted 2,586,530 TX packets and 2,584,152 RX packets, with zero drops or errors in both interface logs. The TX rate uses the 10.010 s snapshot interval in the summary. iperf3's UDP loss measures gaps seen by the receiving application.
+
+With a **0.5% UDP loss threshold** for comparison, this run exceeded the threshold. The best observed result below it remains **2.680 Gb/s with 0.166% loss** from the unpaced four-stream runs below. Repeated paced trials around 3 Gb/s with ten streams would establish where that configuration crosses the threshold.
+
 ### Unpaced packet rate
 
 Two four-stream trials and two ten-stream trials used `-b 0` over the same veth pair, with a configured duration of 10 seconds. The zero bitrate disables iperf3's internal pacing limit. iperf3 selected the UDP payload size automatically. [iperf3 options](https://software.es.net/iperf/invoking.html)
@@ -44,7 +56,7 @@ Both ten-stream trials recorded zero TX or RX interface drops or errors alongsid
 
 [Four-stream screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput.png) · [First ten-stream trial screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput_10_streams.png)
 
-### Reproduce the unpaced smoke tests
+### Reproduce the paced and unpaced smoke tests
 
 Install Python 3.12 with venv support, `iperf3`, and `iproute2` on a Linux host. The launcher uses `sudo` to create the veth pair and configure the RX namespace. From the repository root:
 
@@ -57,7 +69,7 @@ python3.12 -m venv .venv312
 
 [`run.sh`](run.sh) uses fixed interface names and the `172.31.251.0/24` test subnet. It removes leftover interfaces with those names and recreates the named RX namespace, so reserve the names for this test and run one instance at a time. Python 3.12's Linux `fork` default lets workers inherit the current script's stop event. Python 3.14's `forkserver` default requires passing that event explicitly to the workers.
 
-The checked-in launcher passes `--bitrate 0 --duration 10` to [`common_test_harness.py`](common_test_harness.py). The client command in [`packet_generation.py`](packet_generation.py) uses `-b 0 -P 10`. Use the [unpaced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/e3a351b830c9458dd0b79cc26dac2dd56fcbe89d/01_baseline) to reproduce the `-P 4 -b 0` comparison. The [paced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/6d46e3e556b41db366a336534cca06ccb80d06e7/01_baseline) used a final `-b 2.5G` for a 10 Gb/s aggregate target.
+The checked-in launcher passes `--bitrate 300M --duration 10` to [`common_test_harness.py`](common_test_harness.py). The client command in [`packet_generation.py`](packet_generation.py) uses `-b 300M -P 10` for the paced 3 Gb/s trial. Set `--bitrate 0` in `run.sh` to repeat the unpaced ten-stream test. Use the [unpaced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/e3a351b830c9458dd0b79cc26dac2dd56fcbe89d/01_baseline) to reproduce the `-P 4 -b 0` comparison. The [paced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/6d46e3e556b41db366a336534cca06ccb80d06e7/01_baseline) used a final `-b 2.5G` for a 10 Gb/s aggregate target.
 
 Use the [single-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/8a3e6ba3cca71654b0b73b0365a4bbfa957239e9/01_baseline) for the original comparison. In that revision, `--bitrate 10G`, `1G`, or `100M` in `run.sh` sets the single-stream target.
 
