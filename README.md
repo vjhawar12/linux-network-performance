@@ -1,16 +1,16 @@
 # Linux Network Performance
 
-A staged Linux networking project for **characterizing Ethernet NICs, physical links, and external switch forwarding**, starting with two physical NIC ports connected through an external switch. The long-term goal is to identify host, NIC, switch, and physical-link bottlenecks under increasing packet rates, including environmental vibration testing.
+A staged Linux networking project for **characterizing Ethernet NICs, physical links, and external switch forwarding**, starting with a software baseline over Linux virtual Ethernet and progressing to two physical NIC ports connected through an external switch. The long-term goal is to identify host, NIC, switch, and physical-link bottlenecks under increasing packet rates, including environmental vibration testing.
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-> **Status (November 2026):** Stage 1 is an unvalidated Python + iperf3 prototype. No complete physical switch benchmark, 10 Gb/s result, or 40/100/400 Gb/s performance result is established yet. Stages 2–4 and shared-code extraction are planned only.
+> **Status (16 November 2026).** Stage 1 completed a [100 Mb/s UDP smoke test over a Linux veth pair](01_baseline/README.md#100-mbs-veth-smoke-test). The run produced an iperf3 summary and TX/RX counter logs. Stage 2 has an experimental C++ AF_PACKET transmitter. Physical-switch benchmarking and Stages 3–4 are planned.
 
 ## Four-stage packet-I/O roadmap
 
 | Stage | Directory | Traffic mechanism | Core engineering question | Target experiment |
 | --- | --- | --- | --- | --- |
-| **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | Initial 10 GbE |
+| **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | 100 Mb/s veth smoke test complete. Physical 10 GbE planned. |
 | **2. Raw Ethernet** | [`02_af_packet/`](02_af_packet/README.md) | C++ sender/receiver using `AF_PACKET` | What changes when we control L2 frames and packet batching? | Compare on 10 GbE |
 | **3. AF_XDP** | [`03_af_xdp/`](03_af_xdp/README.md) | C++ AF_XDP rings and UMEM | Does ring-based I/O and supported zero-copy improve packet-rate/CPU efficiency? | Explore 10–40 GbE |
 | **4. DPDK** | [`04_dpdk/`](04_dpdk/README.md) | C++ DPDK Ethernet engine | How do multi-queue, multicore, NUMA, and NIC capabilities scale? | Long-term 100–400 GbE |
@@ -51,10 +51,13 @@ Supporting tools are **not extra stages**: [kernel pktgen](diagnostics/kernel_pk
 
 ```text
 linux-network-performance/
-├── 01_baseline/             # Existing Python/iperf3 prototype
+├── 01_baseline/             # Python + iperf3 baseline
 │   ├── benchmark.py
+│   ├── run.sh
+│   ├── results/             # Published veth run
 │   └── README.md
-├── 02_af_packet/            # Planned C++ raw Ethernet
+├── 02_af_packet/            # Experimental C++ raw Ethernet
+│   ├── packet_transmission.cpp
 │   └── README.md
 ├── 03_af_xdp/               # Planned C++ AF_XDP
 │   └── README.md
@@ -67,10 +70,11 @@ linux-network-performance/
 │   │   └── README.md
 │   └── kernel_tracing/      # Supporting bottleneck analysis
 │       └── README.md
+├── screenshots/            # Benchmark screenshots
 └── README.md                 # Main architecture and stage roadmap
 ```
 
-Stages 2–4 and `common/` currently contain **documentation, not implementations**. Stage 1 contains the Python `benchmark.py` prototype and its documentation; the obsolete C/C++ prototype and root CMake target were removed before Stage 2 development. Stage 2 will introduce its own C++ source and build configuration. Future `src/`, `common/python/`, `common/cpp/`, and `tests/` will be added as implementation progresses.
+The [Stage 1 README](01_baseline/README.md) has the veth quick start, measured results, and links to the raw capture. The [Stage 2 README](02_af_packet/README.md) describes the current transmitter and its validation status. Stages 3–4 and `common/` document the planned designs.
 
 ## Test topology
 
@@ -102,9 +106,9 @@ A receiving application seeing missing packets does **not** prove the switch dro
 
 ## Current priorities
 
-1. **Stabilize Stage 1:** validate startup, ready events, first/final counters, failures/cleanup, and a virtual-network smoke test.
+1. **Extend the Stage 1 software baseline.** Validate the counter boundaries and repeat the veth runs at 100 Mb/s, 500 Mb/s, and 1 Gb/s.
 2. **Test on physical 10 GbE:** confirm switch forwarding and baseline throughput/loss/NIC counters before claims about hardware behavior.
-3. **Build Stage 2 separately:** C++ AF_PACKET frame generator and receiver; keep iperf3 as an independent baseline and evolve Python into a reusable controller.
+3. **Validate Stage 2.** Check repeated AF_PACKET transmission, then add receiver-side accounting for comparison with the iperf3 baseline.
 4. **Profile before escalating:** advance to AF_XDP and DPDK where the NIC supports them and measurements justify the complexity. Use diagnostic tools as needed.
 
 ## Safety
