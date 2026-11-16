@@ -316,7 +316,7 @@ class NetworkInterfaceProcess:
         stream_finished.set()  
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
-    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J"]
+    cmd = ["iperf3", "-c", rx.ip, "-B", tx.ip, "--bind-dev", tx.intf_name, "-u", "-b", bitrate, "-t", str(duration), "-J", "-P", "4", "-b", "2.5G"]
     # creates a subprocess managed by the os
     process = await asyncio.create_subprocess_exec(
         *cmd,
