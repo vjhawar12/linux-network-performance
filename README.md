@@ -4,7 +4,7 @@ A staged Linux networking project for **characterizing Ethernet NICs, physical l
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with target rates of **100 Mb/s**, **1 Gb/s**, and **10 Gb/s**. The trials ran inside one Linux host. At a 10 Gb/s aggregate target, iperf3 reported **1.062 Gb/s with one stream** and **2.604 Gb/s with four streams**. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
+> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with target rates of **100 Mb/s**, **1 Gb/s**, and **10 Gb/s**. The trials ran inside one Linux host. At a 10 Gb/s aggregate target, iperf3 reported **1.062 Gb/s with one stream** and **2.604 Gb/s with four streams**. The [unpaced four-stream veth trials](01_baseline/README.md#unpaced-four-stream-packet-rate) reached a highest observed 10-second average of **about 231,000 TX interface packets/s**, with **2.680 Gb/s** of iperf3-reported aggregate UDP bitrate in that trial. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
 
 ## Four-stage packet-I/O roadmap
 
