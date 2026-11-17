@@ -17,7 +17,7 @@ PacketReceiver<packet_size>::PacketReceiver(
     &tv,
     sizeof(timeval)
 ), num_packets_expected(num_packets_expected) {
-    buf = new char[num_packets_expected]; 
+    buf = new char[num_packets_expected * packet_size]; 
 }
 
 template <uint32_t packet_size>

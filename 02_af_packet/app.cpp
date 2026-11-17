@@ -25,6 +25,7 @@ int app(int argc, char *argv[]) {
             PacketGenerator<256> gen(source_mac_address, dest_mac_address, idx, payload, num_packets); 
             PacketReceiver<256> receiver(dest_mac_address, idx, tv, num_packets); 
             gen.generate(); 
+            receiver.receive();
             std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
