@@ -35,8 +35,8 @@ int app(int argc, char *argv[]) {
                 trecv.join();
                 return 1;
             }
-            std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
             trecv.join();
+            std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
