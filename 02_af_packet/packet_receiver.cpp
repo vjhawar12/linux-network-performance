@@ -13,11 +13,16 @@ private:
 public:
     PacketReceiver(
         MacAddress dest_mac_address, 
-        int intf_idx
+        int intf_idx,
+        timeval tv
     ) : 
         raw_socket(
         dest_mac_address, 
-        intf_idx
+        intf_idx, 
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        &tv,
+        sizeof(timeval)
     ), num_packets_expected(
         num_packets_expected
     )  {
@@ -25,8 +30,17 @@ public:
     }
 
     void receive() {
+        size_t bytes_recvd = 0;
         while (num_packets_received < num_packets_expected) {
-            recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
+            bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
+            if (bytes_recvd < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    printf("Receive timed out.\n");
+                } else {
+                    perror("recv error");
+                }
+                continue;
+            } 
             num_packets_received++;
         }
     }

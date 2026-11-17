@@ -42,6 +42,10 @@ private:
     socklen_t socklen = sizeof(dest); 
 public:
     PacketSocket(const MacAddress& dest_mac_address, int intf_idx);
+    PacketSocket(
+        const MacAddress& dest_mac_address, int intf_idx, 
+        int sockopt, int level, void* optvalue, size_t optlen
+    ); 
     // block copy constructor / assignment operator because that lets double-close on the same fd be possible
     PacketSocket(const PacketSocket& other) = delete;
     PacketSocket& operator= (const PacketSocket& other) = delete;

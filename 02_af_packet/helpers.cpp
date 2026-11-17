@@ -121,6 +121,15 @@ public:
         dest.sll_addr[5] =  dest_mac_address.get(5);
         dest.sll_halen = ETH_ALEN; 
     }
+
+    PacketSocket(
+        const MacAddress& dest_mac_address, int intf_idx, 
+        int sockopt, int level, void* optvalue, size_t optlen
+    ) 
+    : PacketSocket(dest_mac_address, intf_idx)
+    {
+        setsockopt(fd, sockopt, level, optvalue, optlen);  
+    }
     // block copy constructor / assignment operator because that lets double-close on the same fd be possible
     PacketSocket(const PacketSocket& other) = delete;
     PacketSocket& operator= (const PacketSocket& other) = delete;
