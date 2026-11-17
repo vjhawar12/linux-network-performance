@@ -1,15 +1,14 @@
-/* 
-Using a traditional network socket with AF_INET and a TCP/UDP payload would force the packet to follow this path roughly: 
-user process -> ip stack (routing tables, firewall rules, etc) -> kernel -> NIC on the TX side -> Switch -> NIC on the RX side -> system DRAM
-This doesn't test the maximum throughput of packet flow through the switch as well because the packets aren't going directly to the switch
-
-Because we're just testing layer 2 functionality, we don't need to involve the IP stack at all and can just work with MAC addresses. This means we 
-don't need a traditional network socket with AF_INET and can instead use a raw socket with a custom payload--not a UDP/TCP payload. This would let the 
-packet path be more like this: user process -> kernel -> NIC on TX side -> Switch -> NIC on RX side -> system DRAM
-This path is more direct and would let us have greather throughput of packets through the switch and would give a more accurate number
-as to what is the real upper limit of packet throughput that the switch can handle before its packet drop statistics cross a significant amount
-*/
-
+#include <stdint.h>
+#include <stddef.h>
+#include <array>
+#include <string>
+#include <stdexcept>
+#include <cstring>
+#include <netinet/if_ether.h>
+#include <netinet/in.h> 
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <unistd.h>
 #include <cerrno>
 #include <cstdint>
 #include <stdexcept>
@@ -97,6 +96,7 @@ public:
     }
 }; 
 
+
 class PacketSocket {
 private:
     int fd = -1;
@@ -180,47 +180,7 @@ struct NetworkInterface {
     bool link_up = false;
 }; 
 
-template <uint16_t packet_size>
-class PacketGenerator {
-private:
-    EthernetFrame<packet_size> frame;
-    PacketSocket raw_socket;  
-    uint64_t num_packets; 
-public:
-    PacketGenerator(
-        MacAddress source_mac_address, 
-        MacAddress dest_mac_address, 
-        int intf_idx, 
-        uint8_t* custom_payload,
-        uint64_t num_packets
-    ) : frame(
-        source_mac_address, 
-        dest_mac_address, 
-        custom_payload, 
-        strlen((const char*)custom_payload)
-    ), raw_socket(
-        dest_mac_address, intf_idx
-    ) {
-        this->num_packets = num_packets;  
-    }
 
-    void generate() {
-        int ret = 0; 
-        for (uint64_t i = 0; i < num_packets; i++) {
-            ret = sendto(
-                raw_socket.get_fd(), 
-                frame.get(), 
-                frame.length(), 
-                0, 
-                reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
-                raw_socket.get_socklen()
-            ); 
-            if (ret == -1) {
-                throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
-            }
-        }
-    }
-};
 
 int intf_name_to_index(std::string intf_name) {
     int idx = if_nametoindex(intf_name.c_str()); 
@@ -326,32 +286,3 @@ void print(std::vector<NetworkInterface> intf_list) {
         }
     }
 }
-
-int main(int argc, char *argv[]) {
-    if (argc == 6) {
-        const char* source_intf_name = argv[1];
-        const char* _src_mac = argv[2];
-        const char* _dest_mac = argv[3];
-        uint8_t* payload = (uint8_t*)argv[4];
-        const char* _num_packets = argv[5]; 
-        char* endptr;
-        uint64_t num_packets = strtoul(_num_packets, &endptr, 10);
-        if (errno == ERANGE || endptr == _num_packets) {
-            std::cerr << "Invalid argument for num_packets: " << _num_packets << std::endl;
-            return 1;
-        }
-        int idx = intf_name_to_index(source_intf_name); 
-        try {
-            MacAddress dest_mac_address(_dest_mac); 
-            MacAddress source_mac_address(_src_mac); 
-            PacketGenerator<256> gen(source_mac_address, dest_mac_address, idx, payload, num_packets); 
-            gen.generate(); 
-        } catch (std::exception& e) {
-            std::cerr << e.what() << std::endl; 
-            return 1;
-        }
-    } else {
-        return 1;
-    }
-    return 0;
-}   
