@@ -2,6 +2,17 @@
 
 **Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
+## TLDR for stage 1
+
+Max throughput before packet drops crossed 0.5% threshold: 2.680 Gbps. 
+
+In stage 1 the packet gets copied by the CPU from the user space process to kernel space where it gets stored in an sk_buff structure somewhere in kernel space memory. Then the NIC's descriptor rings reference that location in kernel space. The DMA then transfers the bytes using the NIC's decriptor rings across the wire. 
+
+On the RX side the TX sequence happens in reverse. Once the bytes enter the NIC the DMA copies them to an sk_buff structure somewhere in kernel space, again the descriptor rings reference this location. Then the sk_buff structures in kernel space get copied over to a user space process (the one calling recv()) via the CPU. This is where the bottleneck was. The socket has a receive queue (~212 KB) whose size is set by net.core.rmem_default and it got filled up, so at higher throughput rates the amount of dropped packets reached ~35%. 
+
+The receive queue's size parameter (net.core.rmem_default) could be modified so it can ingest more packets temporarily, but if the sender is transmitting more bytes than the receiver can process then the value of net.core.rmem_default isn't neccessarily going to catch all the packets, and even if it catches most, the rate at which those packets are processed will certainly increase. Therefore, increasing the size of net.core.rmem_default isn't a perfect fix. 
+
+
 ## Stage 1 Packet Data Path & Bottleneck Location
 
 ```mermaid
@@ -22,10 +33,6 @@ flowchart TD
     style E fill:#ffcccc,stroke:#cc0000,stroke-width:2px,color:#000
     style F fill:#ffe6e6,stroke:#cc0000,stroke-dasharray: 5 5,color:#000
 ```
-
-In stage 1 the packet gets copied by the CPU from the user space process to kernel space where it gets stored in an sk_buff structure somewhere in kernel space memory. Then the NIC's descriptor rings reference that location in kernel space. The DMA then transfers the bytes using the NIC's decriptor rings across the wire. 
-
-On the RX side the TX sequence happens in reverse. Once the bytes enter the NIC the DMA copies them to an sk_buff structure somewhere in kernel space, again the descriptor rings reference this location. Then the sk_buff structures in kernel space get copied over to a user space process (the one calling recv()) via the CPU. This is where the bottleneck was. The socket has a fixed-size receive queue and it got filled up, so, at higher throughput rates the amount of dropped packets reached ~35%. 
 
 ## Virtual Ethernet smoke tests
 
