@@ -23,7 +23,7 @@ int app(int argc, char *argv[]) {
             MacAddress dest_mac_address(_dest_mac); 
             MacAddress source_mac_address(_src_mac); 
             PacketGenerator<256> generator(source_mac_address, dest_mac_address, idx, payload, num_packets); 
-            PacketReceiver<256> receiver(dest_mac_address, 8080, idx, tv, num_packets); 
+            PacketReceiver<256> receiver(dest_mac_address, idx, tv, num_packets); 
             generator.generate(); 
             receiver.receive();
             std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;

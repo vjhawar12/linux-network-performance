@@ -15,15 +15,10 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <stdexcept>
 #include <sys/socket.h>
 #include <net/if.h>
-#include <linux/if_packet.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
 #include <linux/if.h>
 #include <net/ethernet.h> /* the L2 protocols */
 #include <netinet/in.h>
-#include <sys/ioctl.h>
 #include <net/if_arp.h>
-#include <unistd.h>
 #include <string.h>
 #include <cstring>
 #include "helpers.h"
@@ -64,6 +59,5 @@ void PacketGenerator<packet_size>::generate() {
         }
     }
 }
-
 
 template class PacketGenerator<256>;
