@@ -38,6 +38,7 @@ public:
 class PacketSocket {
 private:
     int fd = -1;
+    int intf_idx; 
     sockaddr_ll dest = {};
     socklen_t socklen = sizeof(dest); 
 public:
@@ -54,7 +55,7 @@ public:
     // which could let a double-close on the same fd happen
     PacketSocket(PacketSocket&& other) noexcept;
     PacketSocket& operator= (PacketSocket&& other) noexcept;
-    void bind_socket(int port); 
+    void bind_socket(); 
     int get_fd() const;
     socklen_t get_socklen() const;
     const sockaddr_ll* get_sockaddr() const;

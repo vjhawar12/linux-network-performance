@@ -89,6 +89,7 @@ size_t EthernetFrame<MAX_PAYLOAD_LENGTH>::length() const {
 }
 
 PacketSocket::PacketSocket(const MacAddress& dest_mac_address, int intf_idx) {
+    this->intf_idx = intf_idx;
     fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_802_EX1));
     if (fd == -1) {
         throw std::runtime_error("could not open socket! errno = " + std::to_string(errno)); 
@@ -140,6 +141,16 @@ PacketSocket& PacketSocket::operator= (PacketSocket&& other) noexcept {
         other.socklen = 0; 
     }
     return *this;
+}
+
+void PacketSocket::bind_socket() {
+    sockaddr_ll addr;
+    addr.sll_family = AF_PACKET;
+    addr.sll_ifindex = intf_idx; 
+    addr.sll_pkttype = PACKET_HOST;
+    addr.sll_hatype = ARPHRD_ETHER; 
+    addr.sll_protocol = htons(ETH_P_802_EX1); 
+    bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)); 
 }
 
 int PacketSocket::get_fd() const {

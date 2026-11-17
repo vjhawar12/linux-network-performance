@@ -18,6 +18,7 @@ PacketReceiver<packet_size>::PacketReceiver(
     sizeof(timeval)
 ), num_packets_expected(num_packets_expected) {
     buf = new char[num_packets_expected * packet_size];  
+    raw_socket.bind_socket();
 }
 
 template <uint32_t packet_size>
