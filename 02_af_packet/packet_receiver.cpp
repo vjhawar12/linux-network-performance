@@ -16,7 +16,7 @@ PacketReceiver<packet_size>::PacketReceiver(
     SO_RCVTIMEO,
     &tv,
     sizeof(timeval)
-)  {
+), num_packets_expected(num_packets_expected) {
     buf = new char[num_packets_expected]; 
 }
 
