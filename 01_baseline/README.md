@@ -2,6 +2,28 @@
 
 **Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
+## Stage 1 Packet Data Path & Bottleneck Location
+
+```mermaid
+flowchart TD
+    subgraph TX["Sender (default netns)"]
+        A["iperf3 Client<br/>(User Space Buffer)"] -->|"1. send() syscall<br/>(CPU Copy)"| B["Kernel Space<br/>(sk_buff + UDP/IP Headers)"]
+        B -->|"2. Pointer queued<br/>(Zero Copy)"| C["TX Ring / veth-tx02<br/>(0 TX Drops)"]
+    end
+
+    C -->|"3. DMA (Physical NIC) or<br/>Pointer Swap (veth)"| D["RX Ring / veth-rx02<br/>(0 RX Interface Drops)"]
+
+    subgraph RX["Receiver (rxbench netns)"]
+        D -->|"4. IP/UDP Stack<br/>Queues sk_buff pointer"| E["UDP Socket Receive Buffer<br/>(sk_rmem_alloc ~212 KB default)"]
+        E -.->|"BOTTLENECK: Buffer Full<br/>(~35.6% UdpRcvbufErrors at 7.39 Gbps)"| F["Dropped by Kernel<br/>Before User Space"]
+        E -->|"5. recv() syscall<br/>(CPU Copy — Too Slow to Drain)"| G["iperf3 Server<br/>(User Space Buffer)"]
+    end
+
+    style E fill:#ffcccc,stroke:#cc0000,stroke-width:2px,color:#000
+    style F fill:#ffe6e6,stroke:#cc0000,stroke-dasharray: 5 5,color:#000
+```
+
+
 ## Virtual Ethernet smoke tests
 
 The bitrate-targeted and unpaced trials ran on one Linux host. The iperf3 client sent from `veth-tx02` in the default network namespace to its virtual peer `veth-rx02` in `rxbench-veth-02`. The veth pair forwards traffic inside the Linux kernel. The traffic path used no physical NIC, PHY, cable, or external switch. Each trial used Python 3.12 and a 10 s test duration.
