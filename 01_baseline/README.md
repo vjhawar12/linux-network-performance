@@ -25,7 +25,7 @@ flowchart TD
 
 In stage 1 the packet gets copied by the CPU from the user space process to kernel space where it gets stored in an sk_buff structure somewhere in kernel space memory. Then the NIC's descriptor rings reference that location in kernel space. The DMA then transfers the bytes using the NIC's decriptor rings across the wire. 
 
-On the RX side the TX sequence happens in reverse. Once the bytes enter the NIC the DMA copies them to an sk_buff structure somewhere in kernel space, again the descriptor rings reference this location. Then the sk_buff structures in kernel space get copied over to a user space process (the one calling recv()) via the CPU. This is where the bottleneck was. The socket has a receive queue and it got filled up. 
+On the RX side the TX sequence happens in reverse. Once the bytes enter the NIC the DMA copies them to an sk_buff structure somewhere in kernel space, again the descriptor rings reference this location. Then the sk_buff structures in kernel space get copied over to a user space process (the one calling recv()) via the CPU. This is where the bottleneck was. The socket has a fixed-size receive queue and it got filled up, so, at higher throughput rates the amount of dropped packets reached ~35%. 
 
 ## Virtual Ethernet smoke tests
 
