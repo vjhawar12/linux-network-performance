@@ -12,7 +12,7 @@ private:
 
 public:
     PacketReceiver(MacAddress dest_mac_address, int intf_idx, timeval tv, uint64_t num_packets_expected);
-    void receive();
+    void receive(uint16_t deadline_seconds); 
     std::pair<uint64_t, uint64_t> get();
     ~PacketReceiver();
 }; 

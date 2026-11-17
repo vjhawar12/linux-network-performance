@@ -1,6 +1,8 @@
 #include "packet_receiver.h"
+#include <poll.h>
 #include <cstdint>
 #include <utility>
+#include <iostream>
 
 template <uint32_t packet_size>
 PacketReceiver<packet_size>::PacketReceiver(
@@ -26,19 +28,26 @@ PacketReceiver<packet_size>::PacketReceiver(
 }
 
 template <uint32_t packet_size>
-void PacketReceiver<packet_size>::receive() {
+void PacketReceiver<packet_size>::receive(uint16_t deadline_seconds) {
     ssize_t bytes_recvd = 0;
-    for (uint64_t i = 0 ; i < num_packets_expected; i++) {
-        bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
-        if (bytes_recvd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                printf("Receive timed out.\n");
-            } else {
-                perror("recv error");
-            }
-            continue;
-        } 
-        num_packets_received++;
+    pollfd _pollfd{};
+    _pollfd.fd = raw_socket.get_fd();
+    _pollfd.events = POLLIN;
+    poll(&_pollfd, 1, deadline_seconds * 1000 / num_packets_expected); 
+    auto start = std::chrono::steady_clock::now();
+    while (num_packets_received < num_packets_expected && std::chrono::steady_clock::now() - start < deadline_seconds) {
+        if (_pollfd.revents & POLLIN) {
+            bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
+            if (bytes_recvd < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    printf("Receive timed out.\n");
+                } else {
+                    perror("recv error");
+                }
+                continue;
+            } 
+            num_packets_received++;
+        }
     }
 }
 
