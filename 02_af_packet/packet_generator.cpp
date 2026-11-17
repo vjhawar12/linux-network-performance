@@ -64,3 +64,6 @@ void PacketGenerator<packet_size>::generate() {
         }
     }
 }
+
+
+template class PacketGenerator<256>;

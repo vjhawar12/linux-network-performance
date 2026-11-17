@@ -47,3 +47,5 @@ template <uint32_t packet_size>
 PacketReceiver<packet_size>::~PacketReceiver() {
     delete[] buf;
 }
+
+template class PacketReceiver<256>;

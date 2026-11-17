@@ -34,3 +34,4 @@ perf.data*
 notes.txt
 
 .venv312/
+.cache/
