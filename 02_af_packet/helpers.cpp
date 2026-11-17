@@ -27,169 +27,137 @@
 #include <cstring>
 #include <iostream>
 #include <array>
-#include <vector> 
+#include <vector>
+#include "helpers.h" 
 
-class MacAddress {
-private:
-std::array<uint8_t, 6> mac_addr = {};
-public:
-    MacAddress(const std::string& mac_addr_str) {
-        if  (mac_addr_str.size() != 17) {
-            throw std::runtime_error("Invalid mac address passed!");
-        }
-        int parsed = sscanf(
-            mac_addr_str.c_str(), 
-            "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",  
-            &mac_addr[0], &mac_addr[1], &mac_addr[2],
-            &mac_addr[3], &mac_addr[4], &mac_addr[5]
-        ); 
-        if (parsed != 6) {
-            throw std::runtime_error("Invalid mac address passed!"); 
-        }
+MacAddress::MacAddress(const std::string& mac_addr_str) {
+    if  (mac_addr_str.size() != 17) {
+        throw std::runtime_error("Invalid mac address passed!");
     }
+    int parsed = sscanf(
+        mac_addr_str.c_str(), 
+        "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",  
+        &mac_addr[0], &mac_addr[1], &mac_addr[2],
+        &mac_addr[3], &mac_addr[4], &mac_addr[5]
+    ); 
+    if (parsed != 6) {
+        throw std::runtime_error("Invalid mac address passed!"); 
+    }
+}
 
-    uint8_t get(size_t idx) const {
-        if (idx >= 6) {
-            throw std::runtime_error("Invalid index " + std::to_string(idx)); 
-        }
-        return mac_addr[idx]; 
+uint8_t MacAddress::get(size_t idx) const {
+    if (idx >= 6) {
+        throw std::runtime_error("Invalid index " + std::to_string(idx)); 
     }
-}; 
+    return mac_addr[idx]; 
+}
+
 
 template<uint16_t MAX_PAYLOAD_LENGTH>
-class EthernetFrame {
-private:
-    ether_header header = {}; 
-    std::array<char, sizeof(header) + MAX_PAYLOAD_LENGTH> full_ethernet_frame = {}; 
-    size_t total_len = 0; 
-public:
-    // build the entire ethernet frame with a header and payload
-    const size_t payload_len = 0;
-    EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, uint8_t* custom_payload, size_t len) : payload_len(len) {
-        if (len > MAX_PAYLOAD_LENGTH) {
-            throw std::runtime_error("Payload size must be <= MAX_PAYLOAD_LENGTH"); 
+EthernetFrame<MAX_PAYLOAD_LENGTH>::EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, uint8_t* custom_payload, size_t len) : payload_len(len) {
+    if (len > MAX_PAYLOAD_LENGTH) {
+        throw std::runtime_error("Payload size must be <= MAX_PAYLOAD_LENGTH"); 
+    }
+    total_len = payload_len + sizeof(header); 
+    header.ether_dhost[0] = dest_mac_address.get(0);
+    header.ether_dhost[1] = dest_mac_address.get(1);
+    header.ether_dhost[2] = dest_mac_address.get(2);
+    header.ether_dhost[3] = dest_mac_address.get(3);
+    header.ether_dhost[4] = dest_mac_address.get(4);
+    header.ether_dhost[5] = dest_mac_address.get(5);
+    header.ether_shost[0] = source_mac_address.get(0);
+    header.ether_shost[1] = source_mac_address.get(1);
+    header.ether_shost[2] = source_mac_address.get(2);
+    header.ether_shost[3] = source_mac_address.get(3);
+    header.ether_shost[4] = source_mac_address.get(4);
+    header.ether_shost[5] = source_mac_address.get(5);
+    header.ether_type = htons(ETH_P_802_EX1); 
+    std::memcpy(full_ethernet_frame.data(), &header, sizeof(header)); 
+    std::memcpy(full_ethernet_frame.data() + sizeof(header), custom_payload, len); 
+}
+
+
+template<uint16_t MAX_PAYLOAD_LENGTH>
+const char* EthernetFrame<MAX_PAYLOAD_LENGTH>::get() const {
+    return full_ethernet_frame.data(); 
+}
+
+template<uint16_t MAX_PAYLOAD_LENGTH>
+size_t EthernetFrame<MAX_PAYLOAD_LENGTH>::length() const {
+    return total_len;
+}
+
+PacketSocket::PacketSocket(const MacAddress& dest_mac_address, int intf_idx) {
+    fd = socket(AF_PACKET, SOCK_RAW, 0);
+    if (fd == -1) {
+        throw std::runtime_error("could not open socket! errno = " + std::to_string(errno)); 
+    }
+    dest.sll_family = AF_PACKET;
+    dest.sll_protocol = htons(ETH_P_802_EX1);
+    dest.sll_ifindex = intf_idx;
+    dest.sll_hatype = 0;
+    dest.sll_pkttype = 0; // sll_pkttype makes sense only for the receiving interface
+    dest.sll_addr[0] =  dest_mac_address.get(0);
+    dest.sll_addr[1] =  dest_mac_address.get(1);
+    dest.sll_addr[2] =  dest_mac_address.get(2);
+    dest.sll_addr[3] =  dest_mac_address.get(3);
+    dest.sll_addr[4] =  dest_mac_address.get(4);
+    dest.sll_addr[5] =  dest_mac_address.get(5);
+    dest.sll_halen = ETH_ALEN; 
+}
+
+PacketSocket::PacketSocket(
+    const MacAddress& dest_mac_address, int intf_idx, 
+    int sockopt, int level, void* optvalue, size_t optlen
+) 
+: PacketSocket(dest_mac_address, intf_idx)
+{
+    setsockopt(fd, sockopt, level, optvalue, optlen);  
+}
+
+PacketSocket::PacketSocket(PacketSocket&& other) noexcept {
+    if (this != &other) {
+        this->fd = other.fd;
+        other.fd = -1;
+        std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
+        memset(&other.dest, 0, sizeof(other.dest)); 
+        this->socklen = other.socklen;
+        other.socklen = 0; 
+    }
+}
+
+PacketSocket& PacketSocket::operator= (PacketSocket&& other) noexcept {
+    if (this != &other) {
+        if (this->fd >= 0) {
+            close(this->fd); 
         }
-        total_len = payload_len + sizeof(header); 
-        header.ether_dhost[0] = dest_mac_address.get(0);
-        header.ether_dhost[1] = dest_mac_address.get(1);
-        header.ether_dhost[2] = dest_mac_address.get(2);
-        header.ether_dhost[3] = dest_mac_address.get(3);
-        header.ether_dhost[4] = dest_mac_address.get(4);
-        header.ether_dhost[5] = dest_mac_address.get(5);
-        header.ether_shost[0] = source_mac_address.get(0);
-        header.ether_shost[1] = source_mac_address.get(1);
-        header.ether_shost[2] = source_mac_address.get(2);
-        header.ether_shost[3] = source_mac_address.get(3);
-        header.ether_shost[4] = source_mac_address.get(4);
-        header.ether_shost[5] = source_mac_address.get(5);
-        header.ether_type = htons(ETH_P_802_EX1); 
-        std::memcpy(full_ethernet_frame.data(), &header, sizeof(header)); 
-        std::memcpy(full_ethernet_frame.data() + sizeof(header), custom_payload, len); 
+        this->fd = other.fd;
+        other.fd = -1;
+        std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
+        memset(&other.dest, 0, sizeof(other.dest)); 
+        this->socklen = other.socklen;
+        other.socklen = 0; 
     }
+    return *this;
+}
 
-    const char* get() const {
-        return full_ethernet_frame.data(); 
+int PacketSocket::get_fd() const {
+    return fd;
+}
+
+socklen_t PacketSocket::get_socklen() const {
+    return socklen;
+}
+
+const sockaddr_ll* PacketSocket::get_sockaddr() const {
+    return &dest;
+}
+
+PacketSocket::~PacketSocket() {
+    if (fd >= 0) {
+        close(fd); 
     }
-
-    size_t length() const {
-        return total_len;
-    }
-}; 
-
-
-class PacketSocket {
-private:
-    int fd = -1;
-    sockaddr_ll dest = {};
-    socklen_t socklen = sizeof(dest); 
-public:
-    PacketSocket(const MacAddress& dest_mac_address, int intf_idx) {
-        fd = socket(AF_PACKET, SOCK_RAW, 0);
-        if (fd == -1) {
-            throw std::runtime_error("could not open socket! errno = " + std::to_string(errno)); 
-        }
-        dest.sll_family = AF_PACKET;
-        dest.sll_protocol = htons(ETH_P_802_EX1);
-        dest.sll_ifindex = intf_idx;
-        dest.sll_hatype = 0;
-        dest.sll_pkttype = 0; // sll_pkttype makes sense only for the receiving interface
-        dest.sll_addr[0] =  dest_mac_address.get(0);
-        dest.sll_addr[1] =  dest_mac_address.get(1);
-        dest.sll_addr[2] =  dest_mac_address.get(2);
-        dest.sll_addr[3] =  dest_mac_address.get(3);
-        dest.sll_addr[4] =  dest_mac_address.get(4);
-        dest.sll_addr[5] =  dest_mac_address.get(5);
-        dest.sll_halen = ETH_ALEN; 
-    }
-
-    PacketSocket(
-        const MacAddress& dest_mac_address, int intf_idx, 
-        int sockopt, int level, void* optvalue, size_t optlen
-    ) 
-    : PacketSocket(dest_mac_address, intf_idx)
-    {
-        setsockopt(fd, sockopt, level, optvalue, optlen);  
-    }
-    // block copy constructor / assignment operator because that lets double-close on the same fd be possible
-    PacketSocket(const PacketSocket& other) = delete;
-    PacketSocket& operator= (const PacketSocket& other) = delete;
-    // the move constructor / assignment operator is supported 
-    // however the default move constructor / assignment operator won't invalidate the old fd
-    // which could let a double-close on the same fd happen
-    PacketSocket(PacketSocket&& other) noexcept {
-        if (this != &other) {
-            this->fd = other.fd;
-            other.fd = -1;
-            std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
-            memset(&other.dest, 0, sizeof(other.dest)); 
-            this->socklen = other.socklen;
-            other.socklen = 0; 
-        }
-    }
-
-    PacketSocket& operator= (PacketSocket&& other) noexcept {
-        if (this != &other) {
-            if (this->fd >= 0) {
-                close(this->fd); 
-            }
-            this->fd = other.fd;
-            other.fd = -1;
-            std::memcpy(&this->dest, &other.dest, sizeof(other.dest));
-            memset(&other.dest, 0, sizeof(other.dest)); 
-            this->socklen = other.socklen;
-            other.socklen = 0; 
-        }
-        return *this;
-    }
-
-    int get_fd() const {
-        return fd;
-    }
-
-    socklen_t get_socklen() const {
-        return socklen;
-    }
-
-    const sockaddr_ll* get_sockaddr() const {
-        return &dest;
-    }
-
-    ~PacketSocket() {
-        if (fd >= 0) {
-            close(fd); 
-        }
-    }
-}; 
-
-struct NetworkInterface {
-    std::string intf_name{};
-    size_t intf_idx = 0; 
-    std::array<uint8_t, 6>mac{};
-    unsigned int mtu = 0; 
-    bool link_up = false;
-}; 
-
-
+}
 
 int intf_name_to_index(std::string intf_name) {
     int idx = if_nametoindex(intf_name.c_str()); 

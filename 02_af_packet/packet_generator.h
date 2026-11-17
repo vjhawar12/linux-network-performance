@@ -24,7 +24,7 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <unistd.h>
 #include "helpers.h"
 
-template <uint16_t packet_size>
+template <uint32_t packet_size>
 class PacketGenerator {
 private:
     EthernetFrame<packet_size> frame;

@@ -27,45 +27,40 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <string.h>
 #include <cstring>
 #include "helpers.h"
+#include "packet_generator.h"
 
 template <uint32_t packet_size>
-class PacketGenerator {
-private:
-    EthernetFrame<packet_size> frame;
-    PacketSocket raw_socket;  
-    uint64_t num_packets; 
-public:
-    PacketGenerator(
-        MacAddress source_mac_address, 
-        MacAddress dest_mac_address, 
-        int intf_idx, 
-        uint8_t* custom_payload,
-        uint64_t num_packets
-    ) : frame(
-        source_mac_address, 
-        dest_mac_address, 
-        custom_payload, 
-        strlen((const char*)custom_payload)
-    ), raw_socket(
-        dest_mac_address, intf_idx
-    ) {
-        this->num_packets = num_packets;  
-    }
+PacketGenerator<packet_size>::PacketGenerator(
+    MacAddress source_mac_address, 
+    MacAddress dest_mac_address, 
+    int intf_idx, 
+    uint8_t* custom_payload,
+    uint64_t num_packets
+) : frame(
+    source_mac_address, 
+    dest_mac_address, 
+    custom_payload, 
+    strlen((const char*)custom_payload)
+), raw_socket(
+    dest_mac_address, intf_idx
+) {
+    this->num_packets = num_packets;  
+}
 
-    void generate() {
-        int ret = 0; 
-        for (uint64_t i = 0; i < num_packets; i++) {
-            ret = sendto(
-                raw_socket.get_fd(), 
-                frame.get(), 
-                frame.length(), 
-                0, 
-                reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
-                raw_socket.get_socklen()
-            ); 
-            if (ret == -1) {
-                throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
-            }
+template <uint32_t packet_size>
+void PacketGenerator<packet_size>::generate() {
+    int ret = 0; 
+    for (uint64_t i = 0; i < num_packets; i++) {
+        ret = sendto(
+            raw_socket.get_fd(), 
+            frame.get(), 
+            frame.length(), 
+            0, 
+            reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
+            raw_socket.get_socklen()
+        ); 
+        if (ret == -1) {
+            throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
         }
     }
-};
+}
