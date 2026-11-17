@@ -1,5 +1,81 @@
 # Linux Network Performance
 
+# High-Throughput Network Performance & Switch Resilience Testbed
+
+## Project Goal
+
+The objective of this project is to validate that a **10G/100G network switch and its physical-layer transceivers (PHYs)** can forward high-throughput traffic reliably while subjected to **physical mechanical vibration (shaker-table testing)**.
+
+To prove the switch is resilient at line rate, our test setup must:
+1. **Generate traffic at high rates** (approaching 10 GbE / 100 GbE line rate and high packet-per-second densities) through the switch.
+2. **Receive and verify every returning packet** on the host computer with sequence-number accounting and hardware counter telemetry.
+3. **Achieve 0% host-induced packet loss** during static (non-vibrating) baseline runs.
+
+If the test host itself drops packets due to operating system overhead, it becomes impossible to distinguish a **host software drop** from a **physical PHY/switch drop caused by vibration**. A credible hardware resilience test requires a calibrated, lossless traffic generator and receiver first.
+
+---
+
+## Test Topology
+
+Both the transmitting and receiving network interfaces reside on the **same Linux host** (isolated via network namespaces or kernel bypass), looping traffic through the external switch under test:
+
+```text
++-----------------------------------------------------------------------+
+
+|                         Linux Test Host                               |
+|                                                                       |
+|  [ Traffic Generator (TX) ]              [ Packet Verifier (RX) ]     |
+|     (User-Space App)                        (Sequence & Drop Audit)   |
+|            |                                          ^               |
+|            v                                          |               |
+|  [ TX NIC: enp23s0f0np0 ]                [ RX NIC: enp23s0f1np1 ]     |
++------------|------------------------------------------|---------------+
+
+             |                                          |
+             |       10G / 100G Physical Link           |
+             +--------> [ Switch Under Test ] ----------+
+                         (10G / 100G PHYs)
+                      [ Mounted on Shaker Table ]
+```
+
+Using a single host for both TX and RX provides a **shared monotonic clock (`CLOCK_MONOTONIC` / TSC)** across sender and receiver, allowing microsecond-level correlation between dropped frames, CRC errors, and mechanical vibration telemetry without cross-machine clock drift.
+
+---
+
+## Why Standard Sockets Are the Blocker (Stage 1 Findings)
+
+In **Stage 1 (`01_baseline`)**, we benchmarked standard Linux UDP sockets using `iperf3` over a zero-loss virtual Ethernet (`veth`) pair to establish a kernel-stack baseline:
+
+* **Clean Throughput Ceiling (<0.5% loss):** **2.68 Gb/s** (`0.166%` loss at ~231k packets/s).
+* **Saturation Failure:** At **7.39 Gb/s** (~636k packets/s), `iperf3` experienced **35.6% packet loss** even though the virtual interfaces reported **0 TX drops and 0 RX drops**.
+
+**Root Cause:** Every packet in standard Linux networking requires `sk_buff` metadata allocation, user-to-kernel memory copies (`send()` / `recv()`), and queueing in a fixed-size kernel socket receive buffer (`sk_rmem_alloc`, ~212 KB default). At high packet rates, the receiving application cannot drain this buffer fast enough, causing the kernel to discard packets before user space ever sees them.
+
+**Conclusion:** Standard kernel sockets cannot sustain lossless 10G or 100G verification. If our test instrument drops 35% of packets on its own RX path, it cannot validate switch resilience under vibration.
+
+---
+
+## 4-Stage Architecture Roadmap
+
+To eliminate host-side bottlenecks and build a line-rate test instrument, this repository progresses through four networking architectures:
+
+| Stage | Directory | Technology | Purpose & Bottleneck Addressed |
+| :--- | :--- | :--- | :--- |
+| **Stage 1** | `01_baseline/` | Python + `iperf3` (UDP/IP) | Establishes standard Linux socket baseline; exposes RX socket buffer (`sk_rmem`) drop limits at high packet rates. |
+| **Stage 2** | `02_af_packet/` | C++ `AF_PACKET` (`SOCK_RAW`) | Bypasses IP/UDP stack overhead using raw Layer-2 Ethernet frames (`0x88B5`) and custom sequence tracking, while still traversing kernel `sk_buff` paths. |
+| **Stage 3** | `03_af_xdp/` | C++ `AF_XDP` (eBPF / XDP) | Bypasses kernel `sk_buff` allocation and socket copies via shared `UMEM` rings directly attached to the NIC driver for 10 GbE line-rate testing. |
+| **Stage 4** | `04_dpdk/` | C++ `DPDK` (Poll-Mode Driver) | Full OS kernel bypass with user-space PMDs polling NIC PCIe rings directly, enabling lossless 10G/100G line-rate testing and deterministic hardware timestamps during shaker-table runs. |
+
+---
+
+## Telemetry & Failure Attribution
+
+Across all stages, packet loss is cross-checked across three independent layers to isolate where drops occur:
+1. **Application Layer:** Sequence-number gaps and out-of-order counts at the RX verifier.
+2. **Driver / OS Layer:** Interface counters (`tx_dropped`, `rx_dropped`, `UdpRcvbufErrors`).
+3. **Hardware / PHY Layer:** `ethtool -S` NIC statistics (`rx_crc_errors`, `rx_missed_errors`, symbol errors) and switch-port counters—isolating physical vibration faults from host software limits.
+
+
 A staged Linux networking project for **characterizing Ethernet NICs, physical links, and external switch forwarding**, starting with a software baseline over Linux virtual Ethernet and progressing to two physical NIC ports connected through an external switch. The long-term goal is to identify host, NIC, switch, and physical-link bottlenecks under increasing packet rates, including environmental vibration testing.
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
