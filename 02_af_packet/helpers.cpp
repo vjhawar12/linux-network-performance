@@ -150,7 +150,10 @@ void PacketSocket::bind_socket() {
     addr.sll_pkttype = PACKET_HOST;
     addr.sll_hatype = ARPHRD_ETHER; 
     addr.sll_protocol = htons(ETH_P_802_EX1); 
-    bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)); 
+    int ret = bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)); 
+    if (ret != 0) {
+        throw std::runtime_error("Unable to bind socket! Errno = " + std::to_string(errno)); 
+    }
 }
 
 int PacketSocket::get_fd() const {
