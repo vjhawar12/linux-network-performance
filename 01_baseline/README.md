@@ -4,6 +4,8 @@
 
 ## Virtual Ethernet smoke tests
 
+The highest observed iperf3-reported bitrate below 0.5% UDP loss was **2.680 Gb/s at 0.166% loss**, from an [unpaced four-stream run](#unpaced-packet-rate). The [paced ten-stream run](#paced-ten-stream-trial) came close to its 3 Gb/s target and reported 1.860% UDP loss. The first physical 10 GbE test is planned separately.
+
 The bitrate-targeted and unpaced trials ran on one Linux host. The iperf3 client sent from `veth-tx02` in the default network namespace to its virtual peer `veth-rx02` in `rxbench-veth-02`. The veth pair forwards traffic inside the Linux kernel. The traffic path used no physical NIC, PHY, cable, or external switch. Each trial used Python 3.12 and a 10 s test duration.
 
 | Metric | 100 Mb/s, 1 stream | 1 Gb/s, 1 stream | 10 Gb/s, 1 stream | 10 Gb/s, 4 streams |
@@ -37,7 +39,7 @@ One 10-second veth run used `-P 10 -b 300M`, for a 3 Gb/s aggregate UDP target. 
 
 The reported bitrate was **99.98% of the target**. Linux counted 2,586,530 TX packets and 2,584,152 RX packets, with zero drops or errors in both interface logs. The TX rate uses the 10.010 s snapshot interval in the summary. iperf3's UDP loss measures gaps seen by the receiving application.
 
-With a **0.5% UDP loss threshold** for comparison, this run exceeded the threshold. The best observed result below it remains **2.680 Gb/s with 0.166% loss** from the unpaced four-stream runs below. Repeated paced trials around 3 Gb/s with ten streams would establish where that configuration crosses the threshold.
+With a **0.5% UDP loss threshold** for comparison, this run exceeded the threshold. Repeated paced trials around 3 Gb/s with ten streams would help locate the rate at which that configuration crosses the threshold.
 
 ### Unpaced packet rate
 
@@ -95,6 +97,8 @@ Candidate ports: Intel X710 `enp23s0f0np0` and `enp23s0f1np1`. Confirm physical 
 - [`run.sh`](run.sh) creates the veth pair, makes a run directory, and invokes the Python harness.
 - [`common_test_harness.py`](common_test_harness.py) owns the CLI, namespace and interface configuration, traffic test timing, iperf3 client execution and JSON parsing, and reporting. It uses per-interface worker processes for Netlink counters and link events. Asyncio tasks drain their snapshots through pipes and append them to the TX/RX logs.
 - [`packet_generation.py`](packet_generation.py) starts the iperf3 server inside the RX namespace and builds the iperf3 client command. The client sends UDP traffic, and the server receives it.
+
+The workers target a 10 ms Netlink polling interval. The logged medians in the bitrate-targeted runs were near 10 ms, with individual gaps as long as 63.932 ms. The logs record snapshot timing. Shaker-table correlation will require measuring the timing of counter reads and missed polling intervals.
 
 The runner lives in Stage 1. The [shared design](../common/README.md) describes how setup, telemetry, and reporting can be reused across backends.
 
