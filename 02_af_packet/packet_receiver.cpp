@@ -38,7 +38,7 @@ void PacketReceiver<packet_size>::receive(uint16_t deadline_seconds) {
     auto start = std::chrono::steady_clock::now();
     while (num_packets_received < num_packets_expected && std::chrono::steady_clock::now() - start < _deadline) {
         // using poll prevents blocking forever with recv and never exiting the loop
-        poll(&_pollfd, 1, deadline_seconds * 1000 / num_packets_expected); 
+        poll(&_pollfd, 1, _deadline - std::chrono::steady_clock::now()); 
         if (_pollfd.revents & POLLIN) {
             bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
             if (bytes_recvd < 0) {
