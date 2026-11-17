@@ -2,6 +2,7 @@
 #include "packet_generator.h"
 #include "packet_receiver.h"
 #include <iostream>
+#include <thread>
 
 int app(int argc, char *argv[]) {
     if (argc == 7) {
@@ -26,8 +27,10 @@ int app(int argc, char *argv[]) {
             MacAddress source_mac_address(_src_mac); 
             PacketGenerator<256> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
             PacketReceiver<256> receiver(dest_mac_address, dest_idx, tv, num_packets); 
-            generator.generate(); 
-            receiver.receive();
+            std::thread tsend(&PacketGenerator<256>::generate, &generator);
+            std::thread trecv(&PacketReceiver<256>::receive, &receiver); 
+            tsend.join();
+            trecv.join();
             std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
