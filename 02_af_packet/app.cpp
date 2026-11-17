@@ -28,13 +28,17 @@ int app(int argc, char *argv[]) {
             PacketGenerator<256> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
             PacketReceiver<256> receiver(dest_mac_address, dest_idx, tv, num_packets); 
             std::thread trecv(&PacketReceiver<256>::receive, &receiver, 10); // 10 second deadline
-            generator.generate();
-            trecv.join();
+            try {
+                generator.generate();
+            } catch (std::exception& e) {
+                std::cerr << e.what() << std::endl;        
+                trecv.join();
+            }
             std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
-        }
+        } 
     } else {
         return 1;
     }
