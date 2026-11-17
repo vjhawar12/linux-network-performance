@@ -4,14 +4,14 @@ A staged Linux networking project for **characterizing Ethernet NICs, physical l
 
 **Architecture:** one Python experiment controller, with progressively more of the packet generation/receiving implemented in C++. Stage 1 uses iperf3 as the traffic engine; Stages 2–4 use custom C++ engines. The Python component should become smaller and focus on orchestration, telemetry aggregation, and reporting—not per-packet operations.
 
-> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests) with aggregate targets of **100 Mb/s**, **1 Gb/s**, **3 Gb/s**, and **10 Gb/s**. The trials ran inside one Linux host. At a 10 Gb/s aggregate target, iperf3 reported **1.062 Gb/s with one stream** and **2.604 Gb/s with four streams**. The [unpaced ten-stream veth trials](01_baseline/README.md#unpaced-packet-rate) reached a highest observed average of **about 637,000 TX interface packets/s** over 10 seconds. iperf3 reported **7.387 Gb/s** aggregate UDP bitrate and **35.614%** UDP loss in that trial. In the [paced ten-stream trial](01_baseline/README.md#paced-ten-stream-trial), iperf3 reported **2.999 Gb/s** with **1.860%** UDP loss at a 3 Gb/s aggregate target. Testing with physical NICs and an external switch, starting at 10 GbE, is planned. Stage 2 has an experimental C++ AF_PACKET transmitter.
+> **Status (16 November 2026).** Stage 1 completed [UDP smoke tests on a Linux virtual Ethernet pair](01_baseline/README.md#virtual-ethernet-smoke-tests). The highest observed iperf3-reported bitrate below 0.5% UDP loss was **2.680 Gb/s at 0.166% loss**. An unpaced ten-stream run reported **7.387 Gb/s at 35.614% loss** and averaged **636,625 TX interface packets/s**. [Stage 2](02_af_packet/README.md) builds as a C++17 executable and includes a raw Ethernet sender and a receiver prototype. An earlier sender revision passed a single-frame WSL2 veth capture with `tcpdump`. Native peer reception and physical 10 GbE switch testing remain pending.
 
 ## Four-stage packet-I/O roadmap
 
 | Stage | Directory | Traffic mechanism | Core engineering question | Target experiment |
 | --- | --- | --- | --- | --- |
 | **1. Baseline** | [`01_baseline/`](01_baseline/README.md) | Python + iperf3 using UDP/IP | Can we prove the physical forwarding path and obtain trustworthy measurements? | Virtual smoke tests at 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s aggregate targets. The 10 Gb/s target was tested with one and four streams. Unpaced trials used four and ten streams. |
-| **2. Raw Ethernet** | [`02_af_packet/`](02_af_packet/README.md) | C++ sender/receiver using `AF_PACKET` | What changes when we control L2 frames and packet batching? | Compare on 10 GbE |
+| **2. Raw Ethernet** | [`02_af_packet/`](02_af_packet/README.md) | C++ `AF_PACKET` sender and receiver prototype | How does direct Layer 2 traffic compare with the UDP baseline? | Verify native peer reception over veth, then compare on 10 GbE |
 | **3. AF_XDP** | [`03_af_xdp/`](03_af_xdp/README.md) | C++ AF_XDP rings and UMEM | Does ring-based I/O and supported zero-copy improve packet-rate/CPU efficiency? | Explore 10–40 GbE |
 | **4. DPDK** | [`04_dpdk/`](04_dpdk/README.md) | C++ DPDK Ethernet engine | How do multi-queue, multicore, NUMA, and NIC capabilities scale? | Long-term 100–400 GbE |
 
@@ -58,7 +58,10 @@ linux-network-performance/
 │   ├── results/             # Published veth runs
 │   └── README.md
 ├── 02_af_packet/            # Experimental C++ raw Ethernet
-│   ├── packet_generation.cpp
+│   ├── app.cpp
+│   ├── helpers.cpp / helpers.h
+│   ├── packet_generator.cpp / packet_generator.h
+│   ├── packet_receiver.cpp / packet_receiver.h
 │   └── README.md
 ├── 03_af_xdp/               # Planned C++ AF_XDP
 │   └── README.md
@@ -73,10 +76,12 @@ linux-network-performance/
 │       └── README.md
 ├── screenshots/
 │   └── veth-smoke-tests/   # Terminal captures from virtual Ethernet runs
-└── README.md                 # Main architecture and stage roadmap
+├── CMakeLists.txt           # Builds the Stage 2 executable
+├── main.cpp                 # Calls the Stage 2 application
+└── README.md                # Main architecture and stage roadmap
 ```
 
-The Stage 1 runner handles setup, telemetry, and reporting in [`common_test_harness.py`](01_baseline/common_test_harness.py). Its [`packet_generation.py`](01_baseline/packet_generation.py) launches the iperf3 server and builds the client command. The [Stage 1 README](01_baseline/README.md) has the veth quick start and raw captures. The [Stage 2 README](02_af_packet/README.md) describes the current transmitter and its validation status. Stages 3–4 and `common/` document the planned designs.
+The Stage 1 runner handles setup, telemetry, and reporting in [`common_test_harness.py`](01_baseline/common_test_harness.py). Its [`packet_generation.py`](01_baseline/packet_generation.py) launches the iperf3 server and builds the client command. The [Stage 1 README](01_baseline/README.md) has the veth quick start and raw captures. The [Stage 2 README](02_af_packet/README.md) covers the CMake build, the peer-side capture procedure, and the current receiver limitations. Stages 3–4 and `common/` document the planned designs.
 
 ## Planned physical switch test topology
 
@@ -110,7 +115,7 @@ A receiving application seeing missing packets does **not** prove the switch dro
 
 1. **Extend the Stage 1 software baseline.** Validate the counter boundaries, repeat the paced ten-stream trials near 3 Gb/s, and capture UDP socket counters to investigate loss.
 2. **Test on physical 10 GbE:** confirm switch forwarding and baseline throughput/loss/NIC counters before claims about hardware behavior.
-3. **Validate Stage 2.** Check repeated AF_PACKET transmission, then add receiver-side accounting for comparison with the iperf3 baseline.
+3. **Validate Stage 2.** Confirm repeated AF_PACKET transmission with a peer-side capture. Bind the native receiver to the peer interface, bound the receive window, and verify frame counts before comparing with the iperf3 baseline.
 4. **Profile before escalating:** advance to AF_XDP and DPDK where the NIC supports them and measurements justify the complexity. Use diagnostic tools as needed.
 
 ## Safety
