@@ -10,14 +10,14 @@ PacketReceiver<packet_size>::PacketReceiver(
     uint64_t num_packets_expected
 ) : 
     raw_socket(
-    dest_mac_address, 
+    dest_mac_address,
     intf_idx, 
     SOL_SOCKET,
     SO_RCVTIMEO,
     &tv,
     sizeof(timeval)
 ), num_packets_expected(num_packets_expected) {
-    buf = new char[num_packets_expected * packet_size]; 
+    buf = new char[num_packets_expected * packet_size];  
 }
 
 template <uint32_t packet_size>

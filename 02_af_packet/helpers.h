@@ -54,6 +54,7 @@ public:
     // which could let a double-close on the same fd happen
     PacketSocket(PacketSocket&& other) noexcept;
     PacketSocket& operator= (PacketSocket&& other) noexcept;
+    void bind_socket(int port); 
     int get_fd() const;
     socklen_t get_socklen() const;
     const sockaddr_ll* get_sockaddr() const;

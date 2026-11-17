@@ -29,6 +29,7 @@
 #include <array>
 #include <vector>
 #include "helpers.h" 
+#include <arpa/inet.h>
 
 MacAddress::MacAddress(const std::string& mac_addr_str) {
     if  (mac_addr_str.size() != 17) {
@@ -88,7 +89,7 @@ size_t EthernetFrame<MAX_PAYLOAD_LENGTH>::length() const {
 }
 
 PacketSocket::PacketSocket(const MacAddress& dest_mac_address, int intf_idx) {
-    fd = socket(AF_PACKET, SOCK_RAW, 0);
+    fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_802_EX1));
     if (fd == -1) {
         throw std::runtime_error("could not open socket! errno = " + std::to_string(errno)); 
     }
@@ -104,7 +105,7 @@ PacketSocket::PacketSocket(const MacAddress& dest_mac_address, int intf_idx) {
     dest.sll_addr[4] =  dest_mac_address.get(4);
     dest.sll_addr[5] =  dest_mac_address.get(5);
     dest.sll_halen = ETH_ALEN; 
-}
+}   
 
 PacketSocket::PacketSocket(
     const MacAddress& dest_mac_address, int intf_idx, 
