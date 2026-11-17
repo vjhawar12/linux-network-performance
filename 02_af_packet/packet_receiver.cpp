@@ -23,7 +23,7 @@ PacketReceiver<packet_size>::PacketReceiver(
 template <uint32_t packet_size>
 void PacketReceiver<packet_size>::receive() {
     ssize_t bytes_recvd = 0;
-    while (num_packets_received < num_packets_expected) {
+    for (uint64_t i = 0 ; i < num_packets_expected; i++) {
         bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
         if (bytes_recvd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
