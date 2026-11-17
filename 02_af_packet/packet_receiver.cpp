@@ -22,7 +22,7 @@ PacketReceiver<packet_size>::PacketReceiver(
 
 template <uint32_t packet_size>
 void PacketReceiver<packet_size>::receive() {
-    size_t bytes_recvd = 0;
+    ssize_t bytes_recvd = 0;
     while (num_packets_received < num_packets_expected) {
         bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
         if (bytes_recvd < 0) {
