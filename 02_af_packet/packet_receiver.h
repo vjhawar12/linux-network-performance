@@ -11,7 +11,7 @@ private:
     char* buf = 0; 
 
 public:
-    PacketReceiver(MacAddress dest_mac_address, int intf_idx, timeval tv);
+    PacketReceiver(MacAddress dest_mac_address, int intf_idx, timeval tv, uint64_t num_packets_expected);
     void receive();
     std::pair<uint64_t, uint64_t> get();
     ~PacketReceiver();
