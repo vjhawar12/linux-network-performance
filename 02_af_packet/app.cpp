@@ -6,7 +6,7 @@
 #include <array>
 
 int app(int argc, char *argv[]) {
-    if (argc == 9) {
+    if (argc == 8) {
         const char* source_intf_name = argv[1];
         const char* destination_intf_name = argv[2];
         const char* _src_mac = argv[3];
