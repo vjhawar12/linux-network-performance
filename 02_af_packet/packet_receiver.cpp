@@ -20,7 +20,7 @@ PacketReceiver<packet_size>::PacketReceiver(
     &tv,
     sizeof(timeval)
 ), num_packets_expected(num_packets_expected) {
-    buf = new char[num_packets_expected * packet_size];  
+    buf = new char[packet_size];  
     try {
         raw_socket.bind_socket();
     } catch (std::exception& e) {
@@ -41,7 +41,7 @@ void PacketReceiver<packet_size>::receive(uint16_t deadline_seconds) {
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(_deadline - std::chrono::steady_clock::now()).count();
         poll(&_pollfd, 1, diff); 
         if (_pollfd.revents & POLLIN) {
-            bytes_recvd = recv(raw_socket.get_fd(), buf + num_packets_received, packet_size, 0); 
+            bytes_recvd = recv(raw_socket.get_fd(), buf, packet_size, 0); 
             if (bytes_recvd < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     printf("Receive timed out.\n");
