@@ -34,8 +34,8 @@ PacketGenerator<packet_size>::PacketGenerator(
 ) : frame(
     source_mac_address, 
     dest_mac_address, 
-    custom_payload, 
-    strlen((const char*)custom_payload)
+    custom_payload.data(), 
+    custom_payload.size()
 ), raw_socket(
     dest_mac_address, intf_idx
 ) {
