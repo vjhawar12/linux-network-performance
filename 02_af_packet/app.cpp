@@ -20,13 +20,13 @@ int app(int argc, char *argv[]) {
         }
         int src_idx = intf_name_to_index(source_intf_name); 
         int dest_idx = intf_name_to_index(destination_intf_name); 
-        timeval tv;
+        timeval tv{};
         tv.tv_usec = 10;
         try {
             MacAddress dest_mac_address(_dest_mac); 
             MacAddress source_mac_address(_src_mac); 
             PacketGenerator<256> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
-            PacketReceiver<256> receiver(dest_mac_address, dest_idx, tv, num_packets); 
+            PacketReceiver<256> receiver(dest_mac_address, dest_idx, num_packets); 
             std::thread trecv(&PacketReceiver<256>::receive, &receiver, 10); // 10 second deadline
             try {
                 generator.generate();

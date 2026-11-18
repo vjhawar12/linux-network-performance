@@ -9,16 +9,11 @@ template <uint32_t packet_size>
 PacketReceiver<packet_size>::PacketReceiver(
     MacAddress dest_mac_address, 
     int intf_idx,
-    timeval tv,
     uint64_t num_packets_expected
 ) : 
     raw_socket(
     dest_mac_address,
-    intf_idx, 
-    SOL_SOCKET,
-    SO_RCVTIMEO,
-    &tv,
-    sizeof(timeval)
+    intf_idx
 ), num_packets_expected(num_packets_expected) {
     buf = new char[packet_size];  
     try {
