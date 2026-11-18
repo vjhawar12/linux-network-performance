@@ -1,37 +1,34 @@
 # Stage 1 — Python + iperf3 Baseline
 
-**Status (16 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. Physical 10 GbE switch testing is planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
+**Status (18 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. A follow-up paced 3 Gb/s test now includes a screenshot of nonzero RX-namespace UDP receive-buffer errors. Physical 10 GbE switch testing is still planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
 
 ## TLDR for stage 1
 
-Max throughput before packet drops crossed 0.5% threshold: 2.680 Gbps. 
+**Best observed veth run below a 0.5% UDP loss threshold:** 2.680 Gb/s with 0.166% iperf3 UDP loss (four unpaced streams). **Highest reported aggregate UDP bitrate:** 7.387 Gb/s with 35.614% UDP loss (ten unpaced streams). These are virtual Ethernet results, not measured physical NIC or switch throughput.
 
-In stage 1 the packet gets copied by the CPU from the user space process to kernel space where it gets stored in an sk_buff structure somewhere in kernel space memory. Then the NIC's descriptor rings reference that location in kernel space. The DMA then transfers the bytes using the NIC's decriptor rings across the wire. 
+**UDP receive-buffer exhaustion observed:** In a *separate*, paced ten-stream, 3 Gb/s veth run on 18 November 2026, the RX namespace's `/proc/net/snmp` reported **151,980 `Udp:RcvbufErrors`** after the test. The same terminal capture shows **2.998 Gb/s** reported aggregate UDP bitrate, **5.861%** iperf3 UDP loss, and **0 TX interface drops**. This is direct evidence that the UDP receive-buffer limit was hit in that run. It does **not** prove that every lost datagram in that run, or all 35.614% loss in the earlier unpaced run, came from this queue. The current harness collects this UDP counter after traffic, without a before/after delta. [Screenshot](../screenshots/veth-smoke-tests/RcvBufErrorsProof.png).
 
-On the RX side the TX sequence happens in reverse. Once the bytes enter the NIC the DMA copies them to an sk_buff structure somewhere in kernel space, again the descriptor rings reference this location. Then the sk_buff structures in kernel space get copied over to a user space process (the one calling recv()) via the CPU. This is where the bottleneck was. The socket has a receive queue (~212 KB) whose size is set by net.core.rmem_default and it got filled up, so at higher throughput rates the amount of dropped packets reached ~35%. 
-
-The receive queue's size parameter (net.core.rmem_default) could be modified so it can ingest more packets temporarily, but if the sender is transmitting more bytes than the receiver can process then the value of net.core.rmem_default isn't neccessarily going to catch all the packets, and even if it catches most, the rate at which those packets are processed will certainly increase. Therefore, increasing the size of net.core.rmem_default isn't a perfect fix. 
-
+**Data path:** In these tests, iperf3 passes UDP data through the kernel's UDP/IP processing, then through an in-kernel veth peer, and ultimately to the receiver's UDP socket queue and application. There are **no physical NIC descriptor rings or DMA transfers** in this virtual test. A packet can be counted at the RX interface but later discarded if the UDP socket queue cannot accept it. Increasing the socket receive buffer can absorb short bursts, but cannot indefinitely compensate for a sustained arrival rate above the application's consumption rate.
 
 ## Stage 1 Packet Data Path & Bottleneck Location
 
 ```mermaid
 flowchart TD
-    subgraph TX["Sender (default netns)"]
-        A["iperf3 Client<br/>(User Space Buffer)"] -->|"1. send() syscall<br/>(CPU Copy)"| B["Kernel Space<br/>(sk_buff + UDP/IP Headers)"]
-        B -->|"2. Pointer queued<br/>(Zero Copy)"| C["TX Ring / veth-tx02<br/>(0 TX Drops)"]
+    subgraph TX["Sender (default network namespace)"]
+        A["iperf3 client<br/>(user space)"] -->|"UDP send syscall"| B["Linux UDP/IP transmit processing<br/>(sk_buff)"]
+        B --> C["veth-tx02"]
     end
 
-    C -->|"3. DMA (Physical NIC) or<br/>Pointer Swap (veth)"| D["RX Ring / veth-rx02<br/>(0 RX Interface Drops)"]
+    C -->|"In-kernel veth peer delivery<br/>(no physical NIC or DMA)"| D["veth-rx02"]
 
-    subgraph RX["Receiver (rxbench netns)"]
-        D -->|"4. IP/UDP Stack<br/>Queues sk_buff pointer"| E["UDP Socket Receive Buffer<br/>(sk_rmem_alloc ~212 KB default)"]
-        E -.->|"BOTTLENECK: Buffer Full<br/>(~35.6% UdpRcvbufErrors at 7.39 Gbps)"| F["Dropped by Kernel<br/>Before User Space"]
-        E -->|"5. recv() syscall<br/>(CPU Copy — Too Slow to Drain)"| G["iperf3 Server<br/>(User Space Buffer)"]
+    subgraph RX["Receiver (rxbench-veth-02 namespace)"]
+        D -->|"IP/UDP receive processing"| E["UDP socket receive queue"]
+        E -->|"Application recv()"| G["iperf3 server<br/>(user space)"]
+        E -.->|"Receive-buffer limit hit<br/>(Udp:RcvbufErrors)"| F["Datagram dropped<br/>before application delivery"]
     end
 
     style E fill:#ffcccc,stroke:#cc0000,stroke-width:2px,color:#000
-    style F fill:#ffe6e6,stroke:#cc0000,stroke-dasharray: 5 5,color:#000
+    style F fill:#ffe6e6,stroke:#cc0000,stroke-dasharray:5 5,color:#000
 ```
 
 ## Virtual Ethernet smoke tests
@@ -50,7 +47,7 @@ The bitrate-targeted and unpaced trials ran on one Linux host. The iperf3 client
 
 Bitrate, loss, jitter, and interface counters come from the terminal summaries. The script reads iperf3's `end.sum` field, and snapshot gaps use adjacent timestamps in the TX and RX logs. At the same 10 Gb/s aggregate target, the four-stream smoke test reported 2.45× the bitrate of the single-stream smoke test and reached 26.0% of the target. The saved summaries contain aggregate measurements. Separate sender, receiver, and per-stream rates require the full iperf3 report.
 
-iperf3 estimates UDP loss from sequence gaps at the receiving application. The Linux `tx_dropped` and `rx_dropped` counters track drops at the interfaces. A datagram can reach the RX interface and be discarded later if the UDP socket's receive buffer is full. The captures contain no UDP socket counters, so the loss location is unknown. The independent TX and RX snapshot boundaries also make the packet-total difference unsuitable for loss accounting. On a rerun, compare `UdpRcvbufErrors` before and after the test in the RX namespace, before the launcher removes it. [iperf3 UDP loss accounting](https://github.com/esnet/iperf/discussions/1680) · [Linux interface counter definitions](https://docs.kernel.org/networking/statistics.html#struct-rtnl-link-stats64)
+iperf3 estimates UDP loss from sequence gaps at the receiving application. The Linux `tx_dropped` and `rx_dropped` counters track drops at the interfaces. A datagram can reach the RX interface and be discarded later if the UDP socket's receive buffer is full. The original saved trials contain no UDP socket counters, so their loss location was not directly measured. A later paced 3 Gb/s run confirms that RX-side UDP receive-buffer errors do occur under load; it does not retrospectively establish the loss breakdown for the older trials. The independent TX and RX snapshot boundaries also make the packet-total difference unsuitable for loss accounting. Future reruns should compare `Udp:RcvbufErrors` before and after the test inside the RX namespace, before the launcher removes it. [iperf3 UDP loss accounting](https://github.com/esnet/iperf/discussions/1680) · [Linux interface counter definitions](https://docs.kernel.org/networking/statistics.html#struct-rtnl-link-stats64)
 
 | Aggregate UDP target and stream count | Terminal summary | Counter logs | Screenshot |
 | --- | --- | --- | --- |
@@ -71,6 +68,23 @@ The reported bitrate was **99.98% of the target**. Linux counted 2,586,530 TX pa
 
 With a **0.5% UDP loss threshold** for comparison, this run exceeded the threshold. The best observed result below it remains **2.680 Gb/s with 0.166% loss** from the unpaced four-stream runs below. Repeated paced trials around 3 Gb/s with ten streams would establish where that configuration crosses the threshold.
 
+### Follow-up: RX UDP receive-buffer exhaustion (18 November 2026)
+
+A separate **ten-stream, paced 3 Gb/s target** veth run (`-P 10 -b 300M`, 10 seconds) recorded the following in the terminal:
+
+| Measure | Observed value |
+| --- | ---: |
+| iperf3 reported aggregate UDP bitrate | 2.998 Gb/s |
+| iperf3 UDP loss | 5.861% |
+| RX namespace `Udp:RcvbufErrors` (post-test cumulative value) | **151,980** |
+| TX interface drops | 0 |
+
+![Terminal evidence: 3 Gb/s test reports 151,980 RX-namespace UDP receive-buffer errors and 5.861% iperf3 loss](../screenshots/veth-smoke-tests/RcvBufErrorsProof.png)
+
+The nonzero `RcvbufErrors` counter demonstrates that **UDP receive-buffer exhaustion occurred** in this run, despite zero TX interface drops. It is consistent with the receiver's UDP socket queue being unable to accept all incoming datagrams at this workload. This finding strengthens the receive-side bottleneck hypothesis, but it does not prove that buffer exhaustion explains *all* iperf3 loss, nor does it prove the cause of loss in the separate 7.387 Gb/s unpaced trial.
+
+The current `query_snmp_metric()` implementation correctly reads the counter using `ip netns exec`, but only **after** traffic. Since the harness creates a fresh namespace for each test, the post-run counter is informative; nevertheless, capture explicit pre/post values for `RcvbufErrors` and `InErrors` in a future run to obtain a reproducible test-interval delta. The new screenshot is a distinct 3 Gb/s run, **not** the previously recorded 3 Gb/s trial above (which had 1.860% UDP loss).
+
 ### Unpaced packet rate
 
 Two four-stream trials and two ten-stream trials used `-b 0` over the same veth pair, with a configured duration of 10 seconds. The zero bitrate disables iperf3's internal pacing limit. iperf3 selected the UDP payload size automatically. [iperf3 options](https://software.es.net/iperf/invoking.html)
@@ -84,7 +98,7 @@ Two four-stream trials and two ten-stream trials used `-b 0` over the same veth 
 
 The second ten-stream trial ran after the harness split and produced the highest observed average at **636,625 TX interface packets/s** over the 10.011 s TX snapshot interval. That is **2.76×** the best four-stream average. The rate divides the TX counter delta by the elapsed time between the two TX snapshots used in the summary. The interface tally includes any control traffic counted during that interval.
 
-Both ten-stream trials recorded zero TX or RX interface drops or errors alongside **34.793–35.614% UDP loss**. The second trial counted **6,369,796 RX interface packets**. The interface counters describe packets at the veth devices, while iperf3 estimates UDP loss from sequence gaps at the receiving application. The captures leave the drop location unknown. The reported UDP bitrates come from iperf3's aggregate `end.sum`. Receiver goodput requires separate receiver output.
+Both ten-stream trials recorded zero TX or RX interface drops or errors alongside **34.793–35.614% UDP loss**. The second trial counted **6,369,796 RX interface packets**. The interface counters describe packets at the veth devices, while iperf3 estimates UDP loss from sequence gaps at the receiving application. The original unpaced captures do not contain UDP receive-buffer counters, so the exact drop location in those runs remains unverified. A later paced 3 Gb/s run independently confirmed UDP receive-buffer exhaustion under load (see above). The reported UDP bitrates come from iperf3's aggregate `end.sum`. Receiver goodput requires separate receiver output.
 
 [Four-stream screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput.png) · [First ten-stream trial screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput_10_streams.png)
 
@@ -165,7 +179,7 @@ The current iperf3 client uses ten streams, so the example's `--bitrate 1G` requ
 
 ## Measurement plan
 
-Collect application UDP throughput, lost datagrams and jitter; Linux NIC counters such as `tx_packets`, `rx_packets`, `tx_dropped`, `rx_dropped`, `rx_errors`, `rx_crc_errors`, and `rx_missed_errors`; link events; and `ethtool -S` / switch-port counters when available.
+Collect application UDP throughput, lost datagrams and jitter; **before/after `Udp:RcvbufErrors` and `Udp:InErrors` inside the RX namespace**; Linux NIC counters such as `tx_packets`, `rx_packets`, `tx_dropped`, `rx_dropped`, `rx_errors`, `rx_crc_errors`, and `rx_missed_errors`; link events; and `ethtool -S` / switch-port counters when available.
 
 Counter semantics vary by layer. iperf3 receiver loss is not the same metric as hardware CRC errors or NIC `rx_dropped`. The kernel and NIC may update counters less frequently than polling occurs. Record actual collection timestamps and the offered payload rate versus Ethernet line rate. Integrate physical shaker-table telemetry later for precise mechanical correlation.
 
