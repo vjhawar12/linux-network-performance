@@ -12,6 +12,13 @@
 #include <net/if.h>
 #include <vector>
 
+#define ETHERNET_HEADER_BYTES 14
+#define RUN_ID_BYTES 8
+#define SEQUENCE_NUMBER_BYTES 8
+#define PACKET_SIZE_BYTES 256
+#define PAYLOAD_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES)
+#define MESSAGE_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES - RUN_ID_BYTES - SEQUENCE_NUMBER_BYTES)
+
 class MacAddress {
 private:
 std::array<uint8_t, 6> mac_addr = {};

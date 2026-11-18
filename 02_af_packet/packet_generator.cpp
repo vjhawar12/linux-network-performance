@@ -29,7 +29,7 @@ PacketGenerator<packet_size>::PacketGenerator(
     MacAddress source_mac_address, 
     MacAddress dest_mac_address, 
     int intf_idx, 
-    uint8_t* custom_payload,
+    std::array<uint8_t, packet_size - 14>& custom_payload,
     uint64_t num_packets
 ) : frame(
     source_mac_address, 

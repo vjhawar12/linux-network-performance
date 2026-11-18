@@ -3,9 +3,10 @@
 #include "packet_receiver.h"
 #include <iostream>
 #include <thread>
+#include <array>
 
 int app(int argc, char *argv[]) {
-    if (argc == 8) {
+    if (argc == 9) {
         const char* source_intf_name = argv[1];
         const char* destination_intf_name = argv[2];
         const char* _src_mac = argv[3];
@@ -29,15 +30,15 @@ int app(int argc, char *argv[]) {
             MacAddress source_mac_address(_src_mac); 
             // a submitted frame should look like this Ethernet header (14 bytes) | Run ID (8 bytes) | Sequence number (8 bytes) | [custom message e.g. "hello"]
             // the payload supplied by the user via argv should be just the custom message, and the program should append the Run ID and Sequence Number
-            uint8_t payload[242]{};
-            uint8_t message[226]{};
-            std::memcpy(message, _message, strnlen(_message, 226)); 
-            std::memcpy(payload, &runid, sizeof(runid)); 
-            std::memcpy(payload + 8, &sequence_number, sizeof(sequence_number)); 
-            std::memcpy(payload + 16, message, 226); 
-            PacketGenerator<256> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
-            PacketReceiver<256> receiver(dest_mac_address, dest_idx, num_packets); 
-            std::thread trecv(&PacketReceiver<256>::receive, &receiver, 10); // 10 second deadline
+            std::array<uint8_t, PAYLOAD_SIZE_BYTES> payload; 
+            uint8_t message[MESSAGE_SIZE_BYTES]{};
+            std::memcpy(message, _message, strnlen(_message, MESSAGE_SIZE_BYTES)); 
+            std::memcpy(payload.data(), &runid, sizeof(runid)); 
+            std::memcpy(payload.data() + RUN_ID_BYTES, &sequence_number, sizeof(sequence_number)); 
+            std::memcpy(payload.data() + RUN_ID_BYTES + SEQUENCE_NUMBER_BYTES, message, MESSAGE_SIZE_BYTES); 
+            PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
+            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets); 
+            std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, 10); // 10 second deadline
             try {
                 generator.generate();
             } catch (std::exception& e) {
