@@ -368,16 +368,15 @@ def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net
     prefix = f"{protocol}:"
 
     # run this command sudo ip netns exec rxbench-veth-02 
-    subprocess.run(
+    result = subprocess.run(
         ["sudo", "ip", "netns", "exec", "rxbench-veth-02", "cat", filepath], 
         capture_output=True,
         text=True,
         check=True
     )
     
-    with open(filepath, "r", encoding="utf-8") as f:
-        # Filter down to only the two lines matching the protocol prefix
-        matching_lines = [line.strip().split() for line in f if line.startswith(prefix)]
+    # Filter down to only the two lines matching the protocol prefix
+    matching_lines = [line.strip().split() for line in result.stdout.splitlines() if line.startswith(prefix)]
         
     if len(matching_lines) < 2:
         return None
