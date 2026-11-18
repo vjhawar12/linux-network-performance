@@ -37,7 +37,8 @@ public:
     // build the entire ethernet frame with a header and payload
     const size_t payload_len;
     EthernetFrame(const MacAddress& source_mac_address, const MacAddress& dest_mac_address, uint8_t* custom_payload, size_t len); 
-    const char* get() const ; 
+    const char* get() const;
+    void set_sequence_number(uint64_t num); 
     size_t length() const; 
 }; 
 

@@ -77,6 +77,11 @@ EthernetFrame<MAX_PAYLOAD_LENGTH>::EthernetFrame(const MacAddress& source_mac_ad
     std::memcpy(full_ethernet_frame.data() + sizeof(header), custom_payload, len); 
 }
 
+template<uint16_t MAX_PAYLOAD_LENGTH>
+void EthernetFrame<MAX_PAYLOAD_LENGTH>::set_sequence_number(uint64_t num) {
+    uint8_t* ptr = full_ethernet_frame.data() + ETHERNET_HEADER_BYTES + RUN_ID_BYTES;
+    std::memset(ptr, num, sizeof(SEQUENCE_NUMBER_BYTES)); 
+}
 
 template<uint16_t MAX_PAYLOAD_LENGTH>
 const char* EthernetFrame<MAX_PAYLOAD_LENGTH>::get() const {

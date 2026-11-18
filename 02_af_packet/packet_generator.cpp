@@ -46,6 +46,7 @@ template <uint32_t packet_size>
 void PacketGenerator<packet_size>::generate() {
     int ret = 0; 
     for (uint64_t i = 0; i < num_packets; i++) {
+        frame.set_sequence_number(i); 
         ret = sendto(
             raw_socket.get_fd(), 
             frame.get(), 
