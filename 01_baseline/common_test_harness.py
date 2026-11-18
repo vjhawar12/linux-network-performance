@@ -364,6 +364,31 @@ def publish(buffer, fname):
         for line in buffer:
             f.write(f"Timestamp ms: {line[1]} Data: {line[0]}\n")
 
+def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net/snmp"):
+    prefix = f"{protocol}:"
+
+    # run this command sudo ip netns exec rxbench-veth-02 
+    subprocess.run(
+        ["sudo", "ip", "netns", "exec", "rxbench-veth-02", "cat", filepath], 
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    
+    with open(filepath, "r", encoding="utf-8") as f:
+        # Filter down to only the two lines matching the protocol prefix
+        matching_lines = [line.strip().split() for line in f if line.startswith(prefix)]
+        
+    if len(matching_lines) < 2:
+        return None
+        
+    # Skip index 0 (the 'Udp:' prefix) and pair headers with values
+    headers = matching_lines[0][1:]
+    values = [int(v) for v in matching_lines[1][1:]]
+    
+    metrics = dict(zip(headers, values))
+    return metrics.get(target_key)
+
 async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     def calculate_deltas(initial, final):
         delta = {}
@@ -380,6 +405,7 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
     # generate traffic
     summary = await generate_traffic_async(rx, tx, bitrate, duration)
+    rcv_errors = query_snmp_metric("Udp", "RcvbufErrors")
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
     rx.stream_finished.wait()
@@ -406,6 +432,7 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     print(f"Loss percent: {summary['lost_percent']}")
     print(f"Jitter ms: {summary['jitter_ms']}")
     print(f"Time: {time_diff_ms}")
+    print(f"RcvBufErrors: {rcv_errors}")
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
     # want tx and rx statistics to be monitored concurrently with asyncio
