@@ -78,9 +78,10 @@ EthernetFrame<MAX_PAYLOAD_LENGTH>::EthernetFrame(const MacAddress& source_mac_ad
 }
 
 template<uint16_t MAX_PAYLOAD_LENGTH>
-void EthernetFrame<MAX_PAYLOAD_LENGTH>::set_sequence_number(uint64_t num) {
+void EthernetFrame<MAX_PAYLOAD_LENGTH>::set_sequence_number(uint64_t _num) {
     uint8_t* ptr = full_ethernet_frame.data() + ETHERNET_HEADER_BYTES + RUN_ID_BYTES;
-    std::memset(ptr, num, sizeof(SEQUENCE_NUMBER_BYTES)); 
+    uint64_t num = htobe64(_num); //  enforcing big endian order of bytes for sequence num; ensure rx side agrees
+    std::memcpy(ptr, &num, sizeof(num));  
 }
 
 template<uint16_t MAX_PAYLOAD_LENGTH>
