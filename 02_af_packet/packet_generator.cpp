@@ -63,4 +63,9 @@ void PacketGenerator<packet_size>::generate() {
     }
 }
 
+template <uint32_t packet_size>
+unsigned long PacketGenerator<packet_size>::get_tx_received() {
+    return transmitted_packets;
+}
+
 template class PacketGenerator<256>;
