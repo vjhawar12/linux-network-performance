@@ -1,8 +1,7 @@
-from pyroute2 import IPRoute, netns, IPRSocket
-from pyroute2.netlink.rtnl import RTMGRP_LINK
+from pyroute2 import IPRoute
 import time
 import argparse
-import threading
+import subprocess
 
 class NetworkInterfaceException(Exception):
     pass
@@ -31,11 +30,14 @@ def collect(intf_idx, ipr, telemetry):
             if stat in telemetry:
                 telemetry[stat] = (time.time(), stats.get(stat, 0))
     else:
-        raise NetworkInterfaceException("Could not find IFLA_STATS64")   
+        raise NetworkInterfaceException("Could not find IFLA_STATS64")
 
-def app(intf_idx, telemetry):
-    with IPRoute() as ipr:    
-        collect(intf_idx, ipr, telemetry)
+def get_diff(after, before):
+    diff = dict()
+    diff.update(after)
+    for key in after:
+        diff[key] = after[key] - before[key]
+    return diff
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -44,11 +46,26 @@ if __name__ == "__main__":
     args = parser.parse_args()
     rx_intf_idx = args.rx_intf_idx
     tx_intf_idx = args.tx_intf_idx
-    telemetry_tx = dict()
-    telemetry_rx = dict()
-    tx_thread = threading.Thread(target=app, args=(tx_intf_idx, telemetry_tx,))
-    tx_thread.start()
-    app(rx_intf_idx, telemetry_rx)
-    tx_thread.join()
-    print(telemetry_rx)
-    print(telemetry_tx)
+    # before, after
+    telemetry_tx = (dict(), dict())
+    telemetry_rx = (dict(), dict())
+    benchmark_cmd = []
+    # snapshot before
+    with IPRoute() as ipr:    
+        collect(tx_intf_idx, ipr, telemetry_tx[0])
+        collect(rx_intf_idx, ipr, telemetry_rx[0])
+    print(telemetry_rx[0])
+    print(telemetry_tx[0])
+    # use subprocess to run the app.cpp file 
+    subprocess.run(benchmark_cmd)
+    # snapshot after
+    with IPRoute() as ipr:    
+        collect(tx_intf_idx, ipr, telemetry_tx[1])
+        collect(rx_intf_idx, ipr, telemetry_rx[1])
+    print(telemetry_rx[1])
+    print(telemetry_tx[1])
+    # get differences
+    diff_rx = get_diff(telemetry_rx[1], telemetry_rx[0])
+    diff_tx = get_diff(telemetry_tx[1], telemetry_tx[0])
+    print(diff_rx)
+    print(diff_tx)
