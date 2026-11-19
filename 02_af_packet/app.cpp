@@ -56,10 +56,12 @@ int app(int argc, char *argv[]) {
             long elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             results.rx_expected = receiver.get().first;
             results.rx_received = receiver.get().second;
-            results.throughput_bps = (results.rx_received * 8 / elapsed_time) / 1000;
-            std::cout << "RX Expected: " << results.rx_expected << " RX Received: " << results.rx_received << std::endl;
+            results.throughput_bps = results.rx_received * PAYLOAD_SIZE_BYTES * 8 / elapsed_time;
+            std::cout << "RX Packets Expected: " << results.rx_expected << " RX Packets Received: " << results.rx_received << std::endl;
+            std::cout << "RX Bytes Expected: " << results.rx_expected * PAYLOAD_SIZE_BYTES << " RX Bytes Received: " << results.rx_received * PAYLOAD_SIZE_BYTES << std::endl;
+            std::cout << "TX Packets Expected: " << results.tx_expected << " TX Packets Received: " << results.tx_received << std::endl;
+            std::cout << "TX Bytes Expected: " << results.tx_expected * PAYLOAD_SIZE_BYTES << " TX Bytes Received: " << results.tx_received * PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "Throughput (bits per second): " << results.throughput_bps << std::endl;
-            std::cout << "TX Expected: " << results.tx_expected << " TX Received: " << results.tx_received << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;

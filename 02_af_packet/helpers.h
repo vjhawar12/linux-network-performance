@@ -91,5 +91,4 @@ void intf_index_to_name(int index, char* buf, size_t len);
 std::vector<NetworkInterface> discover();
 void print(std::vector<NetworkInterface> intf_list);
 
-
 #endif
