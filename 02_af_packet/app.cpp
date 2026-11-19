@@ -9,22 +9,25 @@
 results_t results{}; 
 
 int app(int argc, char *argv[]) {
-    if (argc == 8) {
+    if (argc == 9) {
         const char* source_intf_name = argv[1];
         const char* destination_intf_name = argv[2];
         const char* _src_mac = argv[3];
         const char* _dest_mac = argv[4];
         const char* _message = argv[5];
-        const char* _num_packets = argv[6]; 
-        const char* _runid = argv[7];
-        char* endptr;
-        uint64_t num_packets = strtoul(_num_packets, &endptr, 10);
+        const char* _bitrate_s = argv[6]; 
+        const char* _duration_s = argv[7]; 
+        const char* _runid = argv[8];
+        char* endptr1, *endptr2;
+        uint64_t bitrate_s = strtoul(_bitrate_s, &endptr1, 10);
+        uint64_t duration_s = strtoul(_duration_s, &endptr2, 10);
+        uint64_t num_packets = bitrate_s * duration_s; 
         results.tx_expected = num_packets;
-        char* endptr2;
-        uint64_t runid = strtoul(_runid, &endptr2, 10); 
+        char* endptr3;
+        uint64_t runid = strtoul(_runid, &endptr3, 10); 
         uint64_t sequence_number = -1; // dummy value, replace this with per-packet ID
-        if (errno == ERANGE || endptr == _num_packets) {
-            std::cerr << "Invalid argument for num_packets: " << _num_packets << std::endl;
+        if (errno == ERANGE || endptr1 == _bitrate_s || endptr2 == _duration_s || endptr3 == _runid) {
+            std::cerr << "Invalid argument" << std::endl;
             return 1;
         }
         int src_idx = intf_name_to_index(source_intf_name); 
@@ -40,7 +43,7 @@ int app(int argc, char *argv[]) {
             std::memcpy(payload.data(), &runid, sizeof(runid)); 
             std::memcpy(payload.data() + RUN_ID_BYTES, &sequence_number, sizeof(sequence_number)); 
             std::memcpy(payload.data() + RUN_ID_BYTES + SEQUENCE_NUMBER_BYTES, message, MESSAGE_SIZE_BYTES); 
-            PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
+            PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, bitrate_s, duration_s); 
             PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets);
             auto start = std::chrono::steady_clock::now(); 
             std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, 10); // 10 second deadline

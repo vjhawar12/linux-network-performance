@@ -319,7 +319,7 @@ class NetworkInterfaceProcess:
 
 async def generate_traffic_async(rx, tx, bitrate, duration):
     # listens on the other end of the socket and sends packets at the specified rate
-    cmd = packet_generation.receive_packets(rx.ip, tx.ip, tx.intf_name, bitrate, duration)
+    cmd = packet_generation.generate(rx.ip, tx.ip, tx.intf_name, bitrate, duration)
     # creates a subprocess managed by the os
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -444,7 +444,7 @@ async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, 
     # creating a process in the rxbench namespace that listens on one end of a network socket 
     # for a connection and waits for packets to arrive
     # sudo ip netns exec rxbench iperf3 -s -B 172.31.250.2
-    packet_generation.packet_gen(rx.namespace, rx.ip)
+    packet_generation.launch_server(rx.namespace, rx.ip)
     # running the iperf3 test to measure packet drop
     await run_test(rx, tx, args.bitrate, args.duration, buffer_tx, buffer_rx)
     # need to wait for monitor to finish before app returns and shutdown

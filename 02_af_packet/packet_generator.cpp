@@ -21,6 +21,7 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <net/if_arp.h>
 #include "helpers.h"
 #include "packet_generator.h"
+#include <chrono>
 
 template <uint32_t packet_size>
 PacketGenerator<packet_size>::PacketGenerator(
@@ -28,7 +29,8 @@ PacketGenerator<packet_size>::PacketGenerator(
     MacAddress dest_mac_address, 
     int intf_idx, 
     std::array<uint8_t, packet_size - 14>& custom_payload,
-    uint64_t num_packets
+    uint64_t bitrate_s,
+    uint16_t duration_s
 ) : frame(
     source_mac_address, 
     dest_mac_address, 
@@ -37,14 +39,18 @@ PacketGenerator<packet_size>::PacketGenerator(
 ), raw_socket(
     dest_mac_address, intf_idx
 ) {
-    this->num_packets = num_packets;  
+    this->bitrate_s = bitrate_s;  
+    this->duration_s = duration_s;  
 }
 
 template <uint32_t packet_size>
 void PacketGenerator<packet_size>::generate() {
     int ret = 0; 
-    for (uint64_t i = 0; i < num_packets; i++) {
-        frame.set_sequence_number(i); 
+    uint64_t sequence_idx = 0; 
+    uint64_t total_packets = bitrate_s * duration_s; 
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(duration_s);
+    while (transmitted_packets < total_packets && std::chrono::steady_clock::now() < deadline) {
+        frame.set_sequence_number(sequence_idx); 
         ret = sendto(
             raw_socket.get_fd(), 
             frame.get(),    

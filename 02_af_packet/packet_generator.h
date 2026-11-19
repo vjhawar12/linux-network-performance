@@ -23,7 +23,8 @@ class PacketGenerator {
 private:
     EthernetFrame<packet_size> frame{};
     PacketSocket raw_socket;  
-    uint64_t num_packets = 0;
+    uint64_t bitrate_s = 0;
+    uint16_t duration_s = 0;
     uint64_t transmitted_packets = 0;
 public:
     PacketGenerator(
@@ -31,7 +32,8 @@ public:
         MacAddress dest_mac_address, 
         int intf_idx, 
         std::array<uint8_t, packet_size - 14>& custom_payload,
-        uint64_t num_packets
+        uint64_t bitrate_s,
+        uint16_t duration_s
     ); 
     void generate();
     unsigned long get_tx_received();
