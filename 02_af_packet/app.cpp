@@ -65,6 +65,7 @@ int app(int argc, char *argv[]) {
             std::cout << "Individual Frame Size: " << PACKET_SIZE_BYTES << " Individual Payload size: " << PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "Elapsed time (seconds): " << elapsed_time << std::endl;
             std::cout << "RX Payload Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
+            std::cout << "Loss percentage: " << 100 * (results.rx_expected - results.rx_received) / (double)results.rx_expected << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
