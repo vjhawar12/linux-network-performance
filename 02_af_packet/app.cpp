@@ -56,7 +56,7 @@ int app(int argc, char *argv[]) {
             long elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             results.rx_expected = receiver.get().first;
             results.rx_received = receiver.get().second;
-            results.throughput_bps = results.rx_received * PAYLOAD_SIZE_BYTES * 8 / elapsed_time;
+            results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (1000 * elapsed_time);
             std::cout << "RX Packets Expected: " << results.rx_expected << " RX Packets Received: " << results.rx_received << std::endl;
             std::cout << "RX Bytes Expected: " << results.rx_expected * PAYLOAD_SIZE_BYTES << " RX Bytes Received: " << results.rx_received * PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "TX Packets Expected: " << results.tx_expected << " TX Packets Received: " << results.tx_received << std::endl;

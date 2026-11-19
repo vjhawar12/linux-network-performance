@@ -7,7 +7,6 @@
 #include <netinet/if_ether.h>
 #include <netinet/in.h> 
 #include <linux/if_packet.h>
-#include <net/if.h>
 #include <unistd.h>
 #include <cerrno>
 #include <cstdint>
@@ -20,7 +19,6 @@
 #include <linux/if.h>
 #include <net/ethernet.h> /* the L2 protocols */
 #include <netinet/in.h>
-#include <sys/ioctl.h>
 #include <net/if_arp.h>
 #include <unistd.h>
 #include <string.h>
