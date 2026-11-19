@@ -57,6 +57,8 @@ void PacketGenerator<packet_size>::generate() {
         ); 
         if (ret == -1) {
             throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
+        } else {
+            transmitted_packets++;
         }
     }
 }

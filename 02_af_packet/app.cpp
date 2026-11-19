@@ -5,6 +5,8 @@
 #include <thread>
 #include <array>
 
+results_t results{}; 
+
 int app(int argc, char *argv[]) {
     if (argc == 8) {
         const char* source_intf_name = argv[1];
@@ -16,6 +18,7 @@ int app(int argc, char *argv[]) {
         const char* _runid = argv[7];
         char* endptr;
         uint64_t num_packets = strtoul(_num_packets, &endptr, 10);
+        results.tx_expected = num_packets;
         char* endptr2;
         uint64_t runid = strtoul(_runid, &endptr2, 10); 
         uint64_t sequence_number = -1; // dummy value, replace this with per-packet ID
@@ -37,7 +40,8 @@ int app(int argc, char *argv[]) {
             std::memcpy(payload.data() + RUN_ID_BYTES, &sequence_number, sizeof(sequence_number)); 
             std::memcpy(payload.data() + RUN_ID_BYTES + SEQUENCE_NUMBER_BYTES, message, MESSAGE_SIZE_BYTES); 
             PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, num_packets); 
-            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets); 
+            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets);
+            auto start = std::chrono::steady_clock::now(); 
             std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, 10); // 10 second deadline
             try {
                 generator.generate();
@@ -46,8 +50,16 @@ int app(int argc, char *argv[]) {
                 trecv.join();
                 return 1;
             }
+            results.tx_received = generator.get_tx_received();
             trecv.join();
-            std::cout << "Expected: " << receiver.get().first << " Received: " << receiver.get().second << std::endl;
+            auto end = std::chrono::steady_clock::now();
+            long elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            results.rx_expected = receiver.get().first;
+            results.rx_received = receiver.get().second;
+            results.throughput_bps = (results.rx_received * 8 / elapsed_time) / 1000;
+            std::cout << "RX Expected: " << results.rx_expected << " RX Received: " << results.rx_received << std::endl;
+            std::cout << "Throughput (bits per second): " << results.throughput_bps << std::endl;
+            std::cout << "TX Expected: " << results.tx_expected << " TX Received: " << results.tx_received << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;

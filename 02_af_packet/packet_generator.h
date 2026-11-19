@@ -21,9 +21,10 @@ as to what is the real upper limit of packet throughput that the switch can hand
 template <uint32_t packet_size>
 class PacketGenerator {
 private:
-    EthernetFrame<packet_size> frame;
+    EthernetFrame<packet_size> frame{};
     PacketSocket raw_socket;  
-    uint64_t num_packets; 
+    uint64_t num_packets = 0;
+    uint64_t transmitted_packets = 0;
 public:
     PacketGenerator(
         MacAddress source_mac_address, 
@@ -33,4 +34,5 @@ public:
         uint64_t num_packets
     ); 
     void generate();
+    unsigned long get_tx_received();
 };
