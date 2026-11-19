@@ -366,7 +366,6 @@ def publish(buffer, fname):
 
 def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net/snmp"):
     prefix = f"{protocol}:"
-
     # run this command sudo ip netns exec rxbench-veth-02 
     result = subprocess.run(
         ["sudo", "ip", "netns", "exec", "rxbench-veth-02", "cat", filepath], 
@@ -374,17 +373,13 @@ def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net
         text=True,
         check=True
     )
-    
     # Filter down to only the two lines matching the protocol prefix
     matching_lines = [line.strip().split() for line in result.stdout.splitlines() if line.startswith(prefix)]
-        
     if len(matching_lines) < 2:
         return None
-        
     # Skip index 0 (the 'Udp:' prefix) and pair headers with values
     headers = matching_lines[0][1:]
     values = [int(v) for v in matching_lines[1][1:]]
-    
     metrics = dict(zip(headers, values))
     return metrics.get(target_key)
 

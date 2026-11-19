@@ -25,4 +25,4 @@ cd 02_af_packet
 
 .venv312/bin/python3 ./test_harness.py \
     --tx_intf_idx "$(cat /sys/class/net/veth-tx/ifindex)" \
-    --rx_intf_idx "$(cat /sys/class/net/veth-rx/ifindex)"
+    --rx_intf_idx "$(cat /sys/class/net/veth-rx/ifindex)" 
