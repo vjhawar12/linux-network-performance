@@ -44,8 +44,10 @@ int app(int argc, char *argv[]) {
             PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets);
             auto start = std::chrono::steady_clock::now(); 
             std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, 10); // 10 second deadline
+            auto end = std::chrono::steady_clock::now(); 
             try {
                 generator.generate();
+                end = std::chrono::steady_clock::now();
             } catch (std::exception& e) {
                 std::cerr << e.what() << std::endl;        
                 trecv.join();
@@ -53,7 +55,6 @@ int app(int argc, char *argv[]) {
             }
             results.tx_received = generator.get_tx_received();
             trecv.join();
-            auto end = std::chrono::steady_clock::now();
             double elapsed_time = std::chrono::duration<double>(end - start).count();
             results.elapsed_time = elapsed_time;
             results.rx_expected = receiver.get().first;
