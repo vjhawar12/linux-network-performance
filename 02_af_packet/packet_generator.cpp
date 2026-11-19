@@ -19,8 +19,6 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <net/ethernet.h> /* the L2 protocols */
 #include <netinet/in.h>
 #include <net/if_arp.h>
-#include <string.h>
-#include <cstring>
 #include "helpers.h"
 #include "packet_generator.h"
 

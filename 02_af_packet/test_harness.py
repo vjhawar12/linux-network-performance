@@ -42,8 +42,8 @@ def get_diff(after, before):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rx_intf_idx")
-    parser.add_argument("--tx_intf_idx")
+    parser.add_argument("--rx_intf_idx", type=int, required=True)
+    parser.add_argument("--tx_intf_idx", type=int, required=True)
     args = parser.parse_args()
     rx_intf_idx = args.rx_intf_idx
     tx_intf_idx = args.tx_intf_idx
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     # use subprocess to run the app.cpp file 
     script_dir = Path(__file__).resolve().parent
     script_path = script_dir / "run.sh"
-    subprocess.run([str(script_path)], cwd=script_dir, capture_output=True, text=True, check=True)
+    result = subprocess.run([str(script_path)], cwd=script_dir, capture_output=True, text=True, check=True)
     # snapshot after
     with IPRoute() as ipr:    
         collect(tx_intf_idx, ipr, telemetry_tx[1])
@@ -85,5 +85,16 @@ if __name__ == "__main__":
     # get differences
     diff_rx = get_diff(telemetry_rx[1], telemetry_rx[0])
     diff_tx = get_diff(telemetry_tx[1], telemetry_tx[0])
-    print(diff_rx)
-    print(diff_tx)
+    print("\n=== NIC STATISTICS ===")
+    print(f"RX packets: {diff_rx['rx_packets']}")
+    print(f"RX bytes: {diff_rx['rx_bytes']}")
+    print(f"RX drops: {diff_rx['rx_dropped']}")
+    print(f"RX errors: {diff_rx['rx_errors']}")
+    print(f"RX CRC errors: {diff_rx['rx_crc_errors']}")
+    print(f"RX missed: {diff_rx['rx_missed_errors']}")
+    print(f"TX packets: {diff_tx['tx_packets']}")
+    print(f"TX bytes: {diff_tx['tx_bytes']}")
+    print(f"TX drops: {diff_tx['tx_dropped']}")
+    print(f"TX errors: {diff_tx['tx_errors']}")
+    print("\n=== CUSTOM PACKET GENERATOR SUMMARY ===")   
+    print(result.stdout)

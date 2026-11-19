@@ -4,6 +4,7 @@
 #include <iostream>
 #include <thread>
 #include <array>
+#include <cmath>
 
 results_t results{}; 
 
@@ -61,7 +62,7 @@ int app(int argc, char *argv[]) {
             std::cout << "RX Bytes Expected: " << results.rx_expected * PAYLOAD_SIZE_BYTES << " RX Bytes Received: " << results.rx_received * PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "TX Packets Expected: " << results.tx_expected << " TX Packets Received: " << results.tx_received << std::endl;
             std::cout << "TX Bytes Expected: " << results.tx_expected * PAYLOAD_SIZE_BYTES << " TX Bytes Received: " << results.tx_received * PAYLOAD_SIZE_BYTES << std::endl;
-            std::cout << "Throughput (bits per second): " << results.throughput_bps << std::endl;
+            std::cout << "Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;

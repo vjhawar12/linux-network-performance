@@ -83,7 +83,7 @@ typedef struct results_t {
     unsigned long rx_received;
     unsigned long tx_expected;
     unsigned long tx_received;
-    unsigned long throughput_bps;
+    double throughput_bps;
 } results_t;
 
 int intf_name_to_index(std::string intf_name);
