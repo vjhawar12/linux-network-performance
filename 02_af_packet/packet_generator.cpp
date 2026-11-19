@@ -66,4 +66,4 @@ unsigned long PacketGenerator<packet_size>::get_tx_received() {
     return transmitted_packets;
 }
 
-template class PacketGenerator<256>;
+template class PacketGenerator<PACKET_SIZE_BYTES>;

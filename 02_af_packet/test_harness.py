@@ -74,7 +74,7 @@ if __name__ == "__main__":
     print(telemetry_tx[0])
     # use subprocess to run the app.cpp file 
     script_dir = Path(__file__).resolve().parent
-    script_path = script_dir / "run.sh"
+    script_path = script_dir / "_launch.sh"
     result = subprocess.run([str(script_path)], cwd=script_dir, capture_output=True, text=True, check=True)
     # snapshot after
     with IPRoute() as ipr:    

@@ -283,4 +283,4 @@ void print(std::vector<NetworkInterface> intf_list) {
     }
 }
 
-template class EthernetFrame<256>;
+template class EthernetFrame<PACKET_SIZE_BYTES>;

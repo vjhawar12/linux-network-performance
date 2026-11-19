@@ -60,4 +60,4 @@ PacketReceiver<packet_size>::~PacketReceiver() {
     delete[] buf;
 }
 
-template class PacketReceiver<256>;
+template class PacketReceiver<PACKET_SIZE_BYTES>;

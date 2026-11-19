@@ -54,7 +54,8 @@ int app(int argc, char *argv[]) {
             results.tx_received = generator.get_tx_received();
             trecv.join();
             auto end = std::chrono::steady_clock::now();
-            long elapsed_time = std::chrono::duration<double>(end - start).count();
+            double elapsed_time = std::chrono::duration<double>(end - start).count();
+            results.elapsed_time = elapsed_time;
             results.rx_expected = receiver.get().first;
             results.rx_received = receiver.get().second;
             results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (elapsed_time);
@@ -63,6 +64,7 @@ int app(int argc, char *argv[]) {
             std::cout << "TX Packets Expected: " << results.tx_expected << " TX Packets Received: " << results.tx_received << std::endl;
             std::cout << "TX Bytes Expected: " << results.tx_expected * PAYLOAD_SIZE_BYTES << " TX Bytes Received: " << results.tx_received * PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
+            std::cout << "Elapsed time (seconds): " << elapsed_time << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
@@ -71,4 +73,4 @@ int app(int argc, char *argv[]) {
         return 1;
     }
     return 0;
-}   
+}       

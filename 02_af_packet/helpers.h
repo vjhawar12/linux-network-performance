@@ -15,7 +15,7 @@
 #define ETHERNET_HEADER_BYTES 14
 #define RUN_ID_BYTES 8
 #define SEQUENCE_NUMBER_BYTES 8
-#define PACKET_SIZE_BYTES 256
+#define PACKET_SIZE_BYTES 1490
 #define PAYLOAD_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES)
 #define MESSAGE_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES - RUN_ID_BYTES - SEQUENCE_NUMBER_BYTES)
 
@@ -84,6 +84,7 @@ typedef struct results_t {
     unsigned long tx_expected;
     unsigned long tx_received;
     double throughput_bps;
+    double elapsed_time;
 } results_t;
 
 int intf_name_to_index(std::string intf_name);
