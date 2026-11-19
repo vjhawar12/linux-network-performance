@@ -59,12 +59,12 @@ int app(int argc, char *argv[]) {
             results.rx_expected = receiver.get().first;
             results.rx_received = receiver.get().second;
             results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (elapsed_time);
-            std::cout << "RX Packets Expected: " << results.rx_expected << " RX Packets Received: " << results.rx_received << std::endl;
-            std::cout << "RX Bytes Expected: " << results.rx_expected * PAYLOAD_SIZE_BYTES << " RX Bytes Received: " << results.rx_received * PAYLOAD_SIZE_BYTES << std::endl;
-            std::cout << "TX Packets Expected: " << results.tx_expected << " TX Packets Received: " << results.tx_received << std::endl;
-            std::cout << "TX Bytes Expected: " << results.tx_expected * PAYLOAD_SIZE_BYTES << " TX Bytes Received: " << results.tx_received * PAYLOAD_SIZE_BYTES << std::endl;
-            std::cout << "Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
+            std::cout << "Frames Requested: " << num_packets << std::endl;
+            std::cout << "Frames Submitted (sendto): " << results.tx_received << std::endl;
+            std::cout << "Frames Read (recv): " << results.rx_received << std::endl;
+            std::cout << "Individual Frame Size: " << PACKET_SIZE_BYTES << " Individual Payload size: " << PAYLOAD_SIZE_BYTES << std::endl;
             std::cout << "Elapsed time (seconds): " << elapsed_time << std::endl;
+            std::cout << "RX Payload Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
