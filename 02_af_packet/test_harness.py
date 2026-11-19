@@ -1,4 +1,5 @@
 from pyroute2 import IPRoute
+from pathlib import Path
 import time
 import argparse
 import subprocess
@@ -36,7 +37,7 @@ def get_diff(after, before):
     diff = dict()
     diff.update(after)
     for key in after:
-        diff[key] = after[key] - before[key]
+        diff[key] = after[key][1] - before[key][1]
     return diff
 
 if __name__ == "__main__":
@@ -46,10 +47,25 @@ if __name__ == "__main__":
     args = parser.parse_args()
     rx_intf_idx = args.rx_intf_idx
     tx_intf_idx = args.tx_intf_idx
+    STAT_NAMES = {
+        "TX": (
+            "tx_packets",
+            "tx_bytes",
+            "tx_dropped",
+            "tx_errors",
+        ),
+        "RX" : (
+            "rx_packets",
+            "rx_bytes",
+            "rx_dropped",
+            "rx_errors",
+            "rx_crc_errors",
+            "rx_missed_errors",
+        )
+    }
     # before, after
-    telemetry_tx = (dict(), dict())
-    telemetry_rx = (dict(), dict())
-    benchmark_cmd = []
+    telemetry_tx = (dict().fromkeys(STAT_NAMES["TX"]), dict().fromkeys(STAT_NAMES["TX"]))
+    telemetry_rx = (dict().fromkeys(STAT_NAMES["RX"]), dict().fromkeys(STAT_NAMES["RX"]))
     # snapshot before
     with IPRoute() as ipr:    
         collect(tx_intf_idx, ipr, telemetry_tx[0])
@@ -57,7 +73,9 @@ if __name__ == "__main__":
     print(telemetry_rx[0])
     print(telemetry_tx[0])
     # use subprocess to run the app.cpp file 
-    subprocess.run(benchmark_cmd)
+    script_dir = Path(__file__).resolve().parent
+    script_path = script_dir / "run.sh"
+    subprocess.run([str(script_path)], cwd=script_dir, capture_output=True, text=True, check=True)
     # snapshot after
     with IPRoute() as ipr:    
         collect(tx_intf_idx, ipr, telemetry_tx[1])
