@@ -381,7 +381,7 @@ def publish(is_tx, buffer, fname, client):
                 "timestamp_ms" : line[1],
                 "data" : line[0]
             })
-            client.send(json.dumps(record))
+            client.send(json.dumps(record).encode("utf-8"))
 
 def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net/snmp"):
     prefix = f"{protocol}:"

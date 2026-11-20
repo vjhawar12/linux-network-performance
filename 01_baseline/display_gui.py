@@ -7,6 +7,7 @@ import os
 import time
 import json
 import threading
+from itertools import pairwise
 
 parser = argparse.ArgumentParser()
 parser.add_argument("socket_path")
@@ -36,21 +37,40 @@ def receive_data(socket_path, data_size, deadline, queue_tx, queue_rx):
                 queue_rx.append(json_data)
 
 @st.fragment(run_every="0.1s")
-def live_chart(queue_tx, queue_rx, deadline):
-    if time.monotonic() >= deadline or not queue_tx or not queue_rx:
+def live_chart(queue_tx, queue_rx):
+    series = (
+        ("TX", "tx_bytes", list(queue_tx)),
+        ("RX", "rx_bytes", list(queue_rx)),
+    )
+    first_timestamps = [
+        samples[0]["timestamp_ms"] for _, _, samples in series if samples
+    ]
+    if not first_timestamps:
         return
-    df = pd.DataFrame(queue)
-    df["Time"] = pd.to_datetime(df["Timestamp_ms"], unit="ms")
-    st.metric("Latest Value", df["Value"].iloc[-1])
-    st.line_chart(df.set_index("Time")["Value"])
+    start_ms = min(first_timestamps)
+    rows = []
+    for direction, counter, samples in series:
+        for previous, current in pairwise(samples):
+            timestamp_ms = current["timestamp_ms"]
+            interval_ms = timestamp_ms - previous["timestamp_ms"]
+            byte_delta = current["data"][counter][1] - previous["data"][counter][1]
+            if interval_ms <= 0 or byte_delta < 0:
+                continue
+            rows.append({
+                "elapsed_s": (timestamp_ms - start_ms) / 1000,
+                "gbps": 8 * byte_delta / (interval_ms * 1_000_000),
+                "direction": direction,
+            })
+    if rows:
+        st.line_chart(rows, x="elapsed_s", y="gbps", color="direction")
 
 if __name__ == "__main__":
     deadline =  time.monotonic() + duration_seconds
     threads = []
-    queue_tx = dict()
-    queue_rx = dict()
-    threads.append(threading.Thread(receive_data, args=(unix_socket_path, data_size, deadline, queue)))
-    live_chart(queue, deadline)
+    queue_tx = []
+    queue_rx = []
+    threads.append(threading.Thread(receive_data, args=(unix_socket_path, data_size, deadline, queue_tx, queue_rx)))
+    live_chart(queue_tx, queue_rx, deadline)
     st.title("🔌 Unix Socket Live Telemetry")
     for thread in threads:
         thread.start()
