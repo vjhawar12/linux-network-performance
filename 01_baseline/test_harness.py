@@ -520,7 +520,7 @@ if __name__ == "__main__":
     buffer_tx = []
     buffer_rx = []
     # Set the path for the Unix socket
-    socket_path = args["socket_path"]
+    socket_path = args.socket_path
     # Create the Unix socket client
     client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     # Connect to the server

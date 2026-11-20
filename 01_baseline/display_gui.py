@@ -13,10 +13,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("socket_path")
 parser.add_argument("packet_size")
 parser.add_argument("duration_s")
-args = parser.parse_known_args()
-unix_socket_path = args["socket_path"]
-data_size = args["packet_size"]
-duration_seconds = args["duration_s"]
+args, _ = parser.parse_known_args()
+unix_socket_path = args.socket_path
+data_size = int(args.packet_size)
+duration_seconds = float(args.duration_s)
 
 @st.cache_resource
 def receive_data(socket_path, data_size, deadline, queue_tx, queue_rx):
@@ -69,8 +69,8 @@ if __name__ == "__main__":
     threads = []
     queue_tx = []
     queue_rx = []
-    threads.append(threading.Thread(receive_data, args=(unix_socket_path, data_size, deadline, queue_tx, queue_rx)))
-    live_chart(queue_tx, queue_rx, deadline)
+    threads.append(threading.Thread(target=receive_data, args=(unix_socket_path, data_size, deadline, queue_tx, queue_rx)))
+    live_chart(queue_tx, queue_rx)
     st.title("🔌 Unix Socket Live Telemetry")
     for thread in threads:
         thread.start()
