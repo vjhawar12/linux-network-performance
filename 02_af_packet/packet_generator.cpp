@@ -47,7 +47,7 @@ template <uint32_t packet_size>
 void PacketGenerator<packet_size>::generate() {
     int ret = 0; 
     uint64_t sequence_idx = 0; 
-    uint64_t total_packets = bitrate_s * duration_s; 
+    uint64_t total_packets = (bitrate_s * duration_s) / (PACKET_SIZE_BYTES * 8); 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(duration_s);
     while (transmitted_packets < total_packets && std::chrono::steady_clock::now() < deadline) {
         frame.set_sequence_number(sequence_idx); 

@@ -7,4 +7,4 @@ sudo timeout 15s "$ROOT_DIR/build/linux_network_performance" \
     veth-tx veth-rx \
     "$(cat /sys/class/net/veth-tx/address)" \
     "$(cat /sys/class/net/veth-rx/address)" \
-    Hello 3000 10 1
+    Hello 3000000000 10 1
