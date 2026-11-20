@@ -67,6 +67,9 @@ class NetworkInterface:
             "tx_bytes",
             "tx_dropped",
             "tx_errors",
+            "qdisc_drops"
+            "qdisc_backlog"
+            "qdisc_requeues"
         ),
         "RX" : (
             "rx_packets",
@@ -164,7 +167,6 @@ class NetworkInterface:
                 readable, _, _ = select([ipr], [], [], 0.25)
                 if not readable:
                     continue
-
                 for msg in ipr.get():
                     if msg.get("event") != "RTM_NEWLINK":
                         continue
@@ -190,9 +192,9 @@ class NetworkInterface:
             and not name.lower().startswith(wireless_prefixes)
             and name != 'lo'
         }
-        print("Available Network Interfaces:\n")
+        print("Wired Network Interfaces:")
         for intf_name, address in wired_interfaces.items():
-            print(f"Interface name: {intf_name} Address: {address}")
+            print(f"Interface name: {intf_name} Address: {address[0].address}")
 
     # call this regularly preferably in its own thread to track packet drop and errors
     # inspect statistics like packet drop and throughput for a network interface 
@@ -219,7 +221,13 @@ class NetworkInterface:
                     if stat in self.telemetry:
                         self.telemetry[stat] = (time.time(), stats.get(stat, 0))
         else:
-            raise NetworkInterfaceException("Could not find IFLA_STATS64")        
+            raise NetworkInterfaceException("Could not find IFLA_STATS64")
+        qdisc_data = ipr.get_qdiscs(self.intf_idx)[0]
+        TCA_STATS2 = qdisc_data.get_attr("TCA_STATS2")
+        TCA_STATS_QUEUE = TCA_STATS2.get_attr("TCA_STATS_QUEUE")
+        self.telemetry["qdisc_drops"] = (time.time(), TCA_STATS_QUEUE["drops"])
+        self.telemetry["qdisc_backlog"] = (time.time(), TCA_STATS_QUEUE["backlog"])
+        self.telemetry["qdisc_requeues"] = (time.time(), TCA_STATS_QUEUE["requeues"])
 
     def snapshot(self):
         with self.snapshot_lock:
@@ -331,8 +339,9 @@ async def generate_traffic_async(rx, tx, bitrate, duration):
     if err:
         print(f"Kernel/Process Error Captured: {err.decode('utf-8')}")
     report = json.loads(data.decode('utf-8'))
-    summary = report["end"]["sum"]
-    return summary
+    summary_sent = report["end"]["sum_sent"]
+    summary_recvd = report["end"]["sum_received"]
+    return summary_sent, summary_recvd
 
 # continuous real-time monitoring of packet statistics
 # this method might return later than when the timestamp was actually taken
@@ -398,7 +407,7 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     tx.stream_started.wait()
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
     # generate traffic
-    summary = await generate_traffic_async(rx, tx, bitrate, duration)
+    summary_sent, summary_received = await generate_traffic_async(rx, tx, bitrate, duration)
     rcv_errors = query_snmp_metric("Udp", "RcvbufErrors")
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
@@ -410,23 +419,43 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
     delta_tx = calculate_deltas(initial_l2_tx, final_l2_tx)
     time_diff_ms = end_ms_tx - start_ms_tx 
-    print("\n=== NIC STATISTICS ===")
-    print(f"RX packets: {delta_rx['rx_packets']}")
-    print(f"RX bytes: {delta_rx['rx_bytes']}")
-    print(f"RX drops: {delta_rx['rx_dropped']}")
-    print(f"RX errors: {delta_rx['rx_errors']}")
-    print(f"RX CRC errors: {delta_rx['rx_crc_errors']}")
-    print(f"RX missed: {delta_rx['rx_missed_errors']}")
+    # packets starts in userspace
+    print("\n=== SENDER APPLICATION (IPERF3) ===")
+    print(f"UDP sender bitrate (bit/s): {summary_sent['bits_per_second']}")
+    print(f"UDP datagrams sent: {summary_sent['packets']}")
+    # packets get copied to kernel space; qdisc is the kernel's traffic control scheduler
+    # tracking this along with routing table / firewalls lets us know if packets were dropped 
+    # within the kernel
+    print("\n=== LINUX TX PATH (QDisc) ===")
+    print(f"QDisc drops: {delta_tx['qdisc_drops']}")
+    print(f"QDisc backlog: {final_l2_tx['qdisc_backlog'][1]}")
+    print(f"QDisc requeues: {delta_tx['qdisc_requeues']}")
+    # packets get referenced by the NIC's descriptor rings and then copied to staging registre
+    # before going across the wire
+    print("\n=== LINUX TX INTERFACE (RUN DELTAS) ===")
     print(f"TX packets: {delta_tx['tx_packets']}")
     print(f"TX bytes: {delta_tx['tx_bytes']}")
-    print(f"TX drops: {delta_tx['tx_dropped']}")
-    print(f"TX errors: {delta_tx['tx_errors']}")
-    print("\n=== IPERF3 SUMMARY ===")
-    print(f"Bits per second: {summary['bits_per_second']}")
-    print(f"Loss percent: {summary['lost_percent']}")
-    print(f"Jitter ms: {summary['jitter_ms']}")
-    print(f"Time: {time_diff_ms}")
-    print(f"RcvBufErrors: {rcv_errors}")
+    print(f"TX drops (tx_dropped): {delta_tx['tx_dropped']}")
+    print(f"TX errors (total): {delta_tx['tx_errors']}")
+    print(f"TX counter snapshot span (ms): {time_diff_ms:.3f}")
+    # packets arrive on the receiving side NIC 
+    print("\n=== LINUX RX INTERFACE (RUN DELTAS) ===")
+    print(f"RX packets: {delta_rx['rx_packets']}")
+    print(f"RX bytes: {delta_rx['rx_bytes']}")
+    print(f"RX drops (rx_dropped): {delta_rx['rx_dropped']}")
+    print(f"RX errors (total): {delta_rx['rx_errors']}")
+    print(f"RX CRC errors: {delta_rx['rx_crc_errors']}")
+    print(f"RX missed packets (rx_missed_errors): {delta_rx['rx_missed_errors']}")
+    # packets get referenced via descriptor ring and copied via DMA to kernelspace
+    print("\n=== LINUX RX UDP SOCKET QUEUE ===")
+    print(f"UDP receive buffer errors (RX namespace, cumulative): {rcv_errors}")
+    # packets arrive at their destination: the userspace application
+    print("\n=== RECEIVER APPLICATION (IPERF3 END-TO-END RESULTS) ===")
+    print(f"UDP receiver goodput (bit/s): {summary_received['bits_per_second']}")
+    print(f"UDP datagrams used to calculate loss: {summary_received['packets']}")
+    print(f"UDP datagrams reported missing: {summary_received['lost_packets']}")
+    print(f"UDP datagram loss (%): {summary_received['lost_percent']}")
+    print(f"UDP jitter (ms): {summary_received['jitter_ms']}")
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
     # want tx and rx statistics to be monitored concurrently with asyncio
@@ -482,7 +511,7 @@ if __name__ == "__main__":
     # viewing statistics in real time
     try:
         # creates the event loop for asyncio with the first coroutine as 'app'
-        asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
+        asyncio.run(app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
         # calling join at the end of the program for cleanup
         NetworkInterfaceProcess.joinall()
     finally:
