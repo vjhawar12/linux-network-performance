@@ -68,9 +68,9 @@ class NetworkInterface:
             "tx_bytes",
             "tx_dropped",
             "tx_errors",
-            "qdisc_drops"
-            "qdisc_backlog"
-            "qdisc_requeues"
+            "qdisc_drops",
+            "qdisc_backlog",
+            "qdisc_requeues",
         ),
         "RX" : (
             "rx_packets",
@@ -348,7 +348,7 @@ async def generate_traffic_async(rx, tx, bitrate, duration):
 # this method might return later than when the timestamp was actually taken
 # but it returns the earlier timestamp which is correctly associated with the data
 # scheduled with asyncio.create_task
-async def monitor(conn, buffer, fname, client):
+async def monitor(is_tx, conn, buffer, fname, client):
     _timestamp_ms = time.monotonic_ns() / 1E6
     length = 0
     while not NetworkInterfaceProcess.stop_collection.is_set():
@@ -362,20 +362,26 @@ async def monitor(conn, buffer, fname, client):
         # since this isn't a strict deadline
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
             _timestamp_ms = time.monotonic_ns() / 1E6
-            publish(buffer[length:], fname, client)
+            publish(is_tx, buffer[length:], fname, client)
             length = len(buffer)
         # sleep for 5 ms to avoid 100% cpu spin while catching the data arriving every 10ms
         await asyncio.sleep(0.005)
     # publish one last time to include the last chunk of data
-    publish(buffer[length:], fname, client)
+    publish(is_tx, buffer[length:], fname, client)
 
-def publish(buffer, fname, client):
+def publish(is_tx, buffer, fname, client):
     with open(fname, 'a') as f:
         message = None
+        record = dict()
         for line in buffer:
-            message = f"Timestamp ms: {line[1]} Data: {line[0]}\n"
+            message = f"{"TX" if is_tx else "RX"} Timestamp ms: {line[1]} Data: {line[0]}\n"
             f.write(message)
-            client.send(message.encode())
+            record.update({
+                "TX" : is_tx,
+                "timestamp_ms" : line[1],
+                "data" : line[0]
+            })
+            client.send(json.dumps(record))
 
 def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net/snmp"):
     prefix = f"{protocol}:"
@@ -463,11 +469,11 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
 
 async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args, client):
     # want tx and rx statistics to be monitored concurrently with asyncio
-    monitor_tx = asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file, client))
-    monitor_rx = asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file, client))
+    monitor_tx = asyncio.create_task(monitor(True, tx_conn_2, buffer_tx, args.tx_file, client))
+    monitor_rx = asyncio.create_task(monitor(False, rx_conn_2, buffer_rx, args.rx_file, client))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
-    # create the tx and rx interfaces from command line arguments
+    # create the tx and rx interfaces from command line arguments   
     tx = NetworkInterfaceProcess(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"], tx_conn_1)
     rx = NetworkInterfaceProcess(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"], rx_conn_1)
     # calling start to launch the per-interface threads
@@ -516,7 +522,7 @@ if __name__ == "__main__":
     # Set the path for the Unix socket
     socket_path = args["socket_path"]
     # Create the Unix socket client
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     # Connect to the server
     client.connect(socket_path)
     # viewing statistics in real time

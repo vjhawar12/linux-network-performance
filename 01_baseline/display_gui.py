@@ -18,7 +18,7 @@ data_size = args["packet_size"]
 duration_seconds = args["duration_s"]
 
 @st.cache_resource
-def receive_data(socket_path, data_size, deadline, queue):
+def receive_data(socket_path, data_size, deadline, queue_tx, queue_rx):
     try:
         os.unlink(socket_path)
     except OSError:
@@ -26,17 +26,20 @@ def receive_data(socket_path, data_size, deadline, queue):
             raise
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
         s.bind(unix_socket_path)
-        s.settimeout(0.5)
+        s.settimeout(1.5)
         while time.monotonic() < deadline:
             data, sender_addr = s.recvfrom(data_size)
             json_data = json.loads(data.decode("utf-8"))
-            queue.append(json_data)
+            if json_data["TX"] == True:
+                queue_tx.append(json_data)
+            else:
+                queue_rx.append(json_data)
 
 @st.fragment(run_every="0.1s")
-def live_chart(queue, deadline):
-    if time.monotonic() >= deadline or not queue:
+def live_chart(queue_tx, queue_rx, deadline):
+    if time.monotonic() >= deadline or not queue_tx or not queue_rx:
         return
-    df = pd.DataFrame(queue, columns=["Value", "Timestamp_ms"])
+    df = pd.DataFrame(queue)
     df["Time"] = pd.to_datetime(df["Timestamp_ms"], unit="ms")
     st.metric("Latest Value", df["Value"].iloc[-1])
     st.line_chart(df.set_index("Time")["Value"])
@@ -44,7 +47,8 @@ def live_chart(queue, deadline):
 if __name__ == "__main__":
     deadline =  time.monotonic() + duration_seconds
     threads = []
-    queue = []
+    queue_tx = dict()
+    queue_rx = dict()
     threads.append(threading.Thread(receive_data, args=(unix_socket_path, data_size, deadline, queue)))
     live_chart(queue, deadline)
     st.title("🔌 Unix Socket Live Telemetry")
