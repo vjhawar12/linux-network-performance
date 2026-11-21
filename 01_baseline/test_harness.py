@@ -229,6 +229,7 @@ class NetworkInterface:
         self.telemetry["qdisc_drops"] = (time.time(), TCA_STATS_QUEUE["drops"])
         self.telemetry["qdisc_backlog"] = (time.time(), TCA_STATS_QUEUE["backlog"])
         self.telemetry["qdisc_requeues"] = (time.time(), TCA_STATS_QUEUE["requeues"])
+        # print(self.telemetry)
 
     def snapshot(self):
         with self.snapshot_lock:
@@ -357,7 +358,7 @@ async def monitor(is_tx, conn, buffer, fname, client):
             # collect and push the data to the buffer
             data, timestamp_ms = await asyncio.to_thread(conn.recv)
             buffer.append((data, timestamp_ms))
-        # every 1s publish the data collected so its responsive without 
+        # every 200ms publish the data collected so its responsive without 
         # too much overhead of file I/O. don't require high performance timer here
         # since this isn't a strict deadline
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
