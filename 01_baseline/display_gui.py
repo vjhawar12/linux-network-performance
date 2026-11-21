@@ -257,6 +257,7 @@ def live_chart(queue_tx, queue_rx):
             ),
             hovermode="x unified",
         )
+        st.subheader("Throughput (RX / TX)")
         st.plotly_chart(fig, width="stretch", theme=None)
 
         # Second Chart: Packet Drops Underneath (NIC, Qdisc & Socket RcvbufErrors)
@@ -320,6 +321,7 @@ def live_chart(queue_tx, queue_rx):
             ),
             hovermode="x unified",
         )
+        st.subheader("Packet Drops per Interval (Socket Rcvbuf, NIC & Qdisc)")
         st.plotly_chart(drop_fig, width="stretch", theme=None)
 
 
