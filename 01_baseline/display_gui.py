@@ -83,7 +83,76 @@ def live_chart(queue_tx, queue_rx):
                 "direction": direction,
             })
     if rows:
-        st.line_chart(rows, x="elapsed_s", y="gbps", color="direction")
+        df = pd.DataFrame(rows)
+        rx_df = df[df["direction"] == "RX"]
+        tx_df = df[df["direction"] == "TX"]
+
+        # KPI Cards Row
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "RX Current",
+            f"{rx_df['gbps'].iloc[-1]:.2f} Gbps" if not rx_df.empty else "0.00 Gbps",
+        )
+        c2.metric(
+            "RX Peak",
+            f"{rx_df['gbps'].max():.2f} Gbps" if not rx_df.empty else "0.00 Gbps",
+        )
+        c3.metric(
+            "TX Current",
+            f"{tx_df['gbps'].iloc[-1]:.2f} Gbps" if not tx_df.empty else "0.00 Gbps",
+        )
+        c4.metric(
+            "TX Peak",
+            f"{tx_df['gbps'].max():.2f} Gbps" if not tx_df.empty else "0.00 Gbps",
+        )
+
+        # Styled Plotly Chart
+        fig = go.Figure()
+        colors = {"RX": "#00D4FF", "TX": "#FF9F1C"}
+        for direction in ["RX", "TX"]:
+            sub = df[df["direction"] == direction].copy()
+            if sub.empty:
+                continue
+            sub["smooth"] = sub["gbps"].rolling(window=5, min_periods=1).mean()
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["elapsed_s"],
+                    y=sub["gbps"],
+                    mode="lines",
+                    line=dict(color=colors[direction], width=1),
+                    opacity=0.25,
+                    showlegend=False,
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["elapsed_s"],
+                    y=sub["smooth"],
+                    mode="lines",
+                    name=f"{direction} (Gbps)",
+                    line=dict(color=colors[direction], width=2.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(0, 212, 255, 0.08)"
+                    if direction == "RX"
+                    else "rgba(255, 159, 28, 0.08)",
+                )
+            )
+
+        fig.update_layout(
+            template="plotly_dark",
+            height=420,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="Elapsed (s)",
+            yaxis_title="Gbps",
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig, width="stretch")
+        #st.line_chart(rows, x="elapsed_s", y="gbps", color="direction")
 
 if __name__ == "__main__":
     deadline =  time.monotonic() + duration_seconds
