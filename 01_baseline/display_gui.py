@@ -17,11 +17,51 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    @import url('https://googleapis.com');
+
+    /* Deep dark-slate radial gradient background */
+    .stApp {
+        background: radial-gradient(circle at 15% 15%, #111b2e 0%, #090d16 55%, #05070c 100%);
+        color: #E2E8F0;
+        font-family: 'Space Grotesk', sans-serif;
+    }
+
+    /* Hide default white top header bar so background flows edge-to-edge */
+    header[data-testid="stHeader"] {
+        background: transparent;
+    }
+
+    /* Crisp technical font for titles and headers */
+    h1, h2, h3 {
+        font-family: 'Space Grotesk', sans-serif !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* Monospace font for captions and metric numbers so digits don't jitter as they update */
+    .stCaption, div[data-testid="stMetricValue"] {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
+    /* Glassmorphism KPI metric cards */
     div[data-testid="stMetric"] {
-        background-color: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 12px 16px;
-        border-radius: 10px;
+        background: rgba(17, 25, 40, 0.65);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(0, 212, 255, 0.18);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        padding: 14px 18px;
+        border-radius: 12px;
+    }
+
+    div[data-testid="stMetricLabel"] {
+        color: #94A3B8 !important;
+        text-transform: uppercase;
+        font-size: 0.78rem;
+        letter-spacing: 0.06em;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #F8FAFC !important;
+        font-weight: 700;
     }
     </style>
 """,
@@ -138,19 +178,23 @@ def live_chart(queue_tx, queue_rx):
                 )
             )
 
-        fig.update_layout(
+            fig.update_layout(
             template="plotly_dark",
+            paper_bgcolor="rgba(17, 25, 40, 0.55)",
+            plot_bgcolor="rgba(0, 0, 0, 0)",
+            font=dict(family="JetBrains Mono, monospace", color="#CBD5E1"),
             height=420,
-            margin=dict(l=10, r=10, t=30, b=10),
+            margin=dict(l=15, r=15, t=35, b=15),
             xaxis_title="Elapsed (s)",
             yaxis_title="Gbps",
-            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.08)"),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
             hovermode="x unified",
         )
+
         st.plotly_chart(fig, width="stretch")
         #st.line_chart(rows, x="elapsed_s", y="gbps", color="direction")
 
