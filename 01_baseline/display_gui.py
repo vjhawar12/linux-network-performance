@@ -190,12 +190,20 @@ def live_chart(queue_tx, queue_rx):
             yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
             xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
             legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(color="#F8FAFC", size=13),
+                bgcolor="rgba(17, 25, 40, 0.85)",
+                bordercolor="rgba(255, 255, 255, 0.15)",
+                borderwidth=1,
             ),
             hovermode="x unified",
         )
 
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
         #st.line_chart(rows, x="elapsed_s", y="gbps", color="direction")
 
 if __name__ == "__main__":
