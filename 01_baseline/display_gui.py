@@ -84,68 +84,105 @@ def receive_data(socket_path, data_size, deadline, queue_tx, queue_rx):
     except OSError:
         if os.path.exists(socket_path):
             raise
+
+    prev_tx, prev_rx = None, None
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
-        s.bind(unix_socket_path)
+        s.bind(socket_path)
         s.settimeout(0.5)
         while time.monotonic() < deadline:
             try:
                 data, sender_addr = s.recvfrom(data_size)
             except TimeoutError:
                 continue
-            json_data = json.loads(data.decode("utf-8"))
-            if json_data["TX"] == True:
-                queue_tx.append(json_data)
-            else:
-                queue_rx.append(json_data)
 
-@st.fragment(run_every="0.1s")
+            json_data = json.loads(data.decode("utf-8"))
+            is_tx = json_data.get("TX") is True
+            prev = prev_tx if is_tx else prev_rx
+
+            if prev is not None:
+                dt = json_data["timestamp_ms"] - prev["timestamp_ms"]
+                byte_key = "tx_bytes" if is_tx else "rx_bytes"
+                drop_key = "tx_dropped" if is_tx else "rx_dropped"
+                db = json_data["data"][byte_key][1] - prev["data"][byte_key][1]
+
+                if dt > 0 and db >= 0:
+                    cur_d = json_data["data"]
+                    prv_d = prev["data"]
+
+                    nic_drops = max(
+                        0,
+                        cur_d.get(drop_key, [0, 0])[1] - prv_d.get(drop_key, [0, 0])[1],
+                    )
+                    qdisc_drops = max(
+                        0,
+                        cur_d.get("qdisc_drops", [0, 0])[1]
+                        - prv_d.get("qdisc_drops", cur_d.get("qdisc_drops", [0, 0]))[1],
+                    )
+                    rcv_errs = max(
+                        0,
+                        cur_d.get("RcvBufErrors", [0, 0])[1]
+                        - prv_d.get("RcvBufErrors", cur_d.get("RcvBufErrors", [0, 0]))[1],
+                    )
+
+                    sample_tuple = (
+                        json_data["timestamp_ms"],
+                        8 * db / (dt * 1_000_000),
+                        nic_drops,
+                        qdisc_drops,
+                        rcv_errs,
+                    )
+                    if is_tx:
+                        queue_tx.append(sample_tuple)
+                    else:
+                        queue_rx.append(sample_tuple)
+
+            if is_tx:
+                prev_tx = json_data
+            else:
+                prev_rx = json_data
+
+@st.fragment(run_every="0.5s")
 def live_chart(queue_tx, queue_rx):
-    series = (
-        ("TX", "tx_bytes", "tx_dropped", list(queue_tx)),
-        ("RX", "rx_bytes", "rx_dropped", list(queue_rx)),
-    )
-    first_timestamps = [
-        samples[0]["timestamp_ms"] for _, _, _, samples in series if samples
-    ]
+    tx_snap = list(queue_tx)
+    rx_snap = list(queue_rx)
+
+    first_timestamps = [snap[0][0] for snap in (tx_snap, rx_snap) if snap]
     if not first_timestamps:
-      return
+        return
+
     start_ms = min(first_timestamps)
     rows = []
-    for direction, byte_key, drop_key, samples in series:
-      for previous, current in pairwise(samples):
-        timestamp_ms = current["timestamp_ms"]
-        interval_ms = timestamp_ms - previous["timestamp_ms"]
-        byte_delta = (
-            current["data"][byte_key][1] - previous["data"][byte_key][1]
-        )
-        if interval_ms <= 0 or byte_delta < 0:
-          continue
-        # Safely extract cumulative drop counters: [epoch_s, count]
-        prev_nic_drops = previous["data"].get(drop_key, [0, 0])[1]
-        curr_nic_drops = current["data"].get(drop_key, [0, 0])[1]
-        nic_drop_delta = max(0, curr_nic_drops - prev_nic_drops)
-        prev_qdisc_drops = previous["data"].get("qdisc_drops", [0, 0])[1]
-        curr_qdisc_drops = current["data"].get("qdisc_drops", [0, 0])[1]
-        qdisc_drop_delta = max(0, curr_qdisc_drops - prev_qdisc_drops)
-        rows.append({
-            "elapsed_s": (timestamp_ms - start_ms) / 1000,
-            "gbps": 8 * byte_delta / (interval_ms * 1_000_000),
-            "nic_drops": nic_drop_delta,
-            "qdisc_drops": qdisc_drop_delta,
-            "direction": direction,
-        })
+    for direction, snap in (("TX", tx_snap), ("RX", rx_snap)):
+        for ts_ms, gbps, nic_d, qdisc_d, rcv_e in snap:
+            rows.append({
+                "elapsed_s": (ts_ms - start_ms) / 1000,
+                "gbps": gbps,
+                "nic_drops": nic_d,
+                "qdisc_drops": qdisc_d,
+                "RcvbufErrors": rcv_e,
+                "direction": direction,
+            })
+
     if rows:
         df = pd.DataFrame(rows)
         rx_df = df[df["direction"] == "RX"]
         tx_df = df[df["direction"] == "TX"]
-        total_rx_drops = int(rx_df["nic_drops"].sum() + rx_df["qdisc_drops"].sum())
-        total_tx_drops = int(tx_df["nic_drops"].sum() + tx_df["qdisc_drops"].sum())
+
+        total_rx_drops = int(
+            rx_df["nic_drops"].sum()
+            + rx_df["qdisc_drops"].sum()
+            + rx_df["RcvbufErrors"].sum()
+        )
+        total_tx_drops = int(
+            tx_df["nic_drops"].sum()
+            + tx_df["qdisc_drops"].sum()
+            + tx_df["RcvbufErrors"].sum()
+        )
+
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric(
             "RX Current",
-            f"{rx_df['gbps'].iloc[-1]:.2f} Gbps"
-            if not rx_df.empty
-            else "0.00 Gbps",
+            f"{rx_df['gbps'].iloc[-1]:.2f} Gbps" if not rx_df.empty else "0.00 Gbps",
         )
         c2.metric(
             "RX Peak",
@@ -154,16 +191,15 @@ def live_chart(queue_tx, queue_rx):
         c3.metric("RX Total Drops", f"{total_rx_drops:,}")
         c4.metric(
             "TX Current",
-            f"{tx_df['gbps'].iloc[-1]:.2f} Gbps"
-            if not tx_df.empty
-            else "0.00 Gbps",
+            f"{tx_df['gbps'].iloc[-1]:.2f} Gbps" if not tx_df.empty else "0.00 Gbps",
         )
         c5.metric(
             "TX Peak",
             f"{tx_df['gbps'].max():.2f} Gbps" if not tx_df.empty else "0.00 Gbps",
         )
         c6.metric("TX Total Drops", f"{total_tx_drops:,}")
-        # Styled Plotly Chart
+
+        # First Chart: Throughput
         fig = go.Figure()
         colors = {"RX": "#00D4FF", "TX": "#FF9F1C"}
         for direction in ["RX", "TX"]:
@@ -172,21 +208,22 @@ def live_chart(queue_tx, queue_rx):
                 continue
             sub["smooth"] = sub["gbps"].rolling(window=5, min_periods=1).mean()
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=sub["elapsed_s"],
                     y=sub["gbps"],
                     mode="lines",
+                    name=f"{direction} Instantaneous",
                     line=dict(color=colors[direction], width=1),
                     opacity=0.25,
                     showlegend=False,
                 )
             )
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=sub["elapsed_s"],
                     y=sub["smooth"],
                     mode="lines",
-                    name=f"{direction} (Gbps)",
+                    name=f"{direction} Rolling Avg",
                     line=dict(color=colors[direction], width=2.5),
                     fill="tozeroy",
                     fillcolor="rgba(0, 212, 255, 0.08)"
@@ -194,7 +231,9 @@ def live_chart(queue_tx, queue_rx):
                     else "rgba(255, 159, 28, 0.08)",
                 )
             )
-            fig.update_layout(
+
+        fig.update_layout(
+            uirevision="throughput_chart",
             template="plotly_dark",
             paper_bgcolor="rgba(17, 25, 40, 0.55)",
             plot_bgcolor="rgba(0, 0, 0, 0)",
@@ -219,42 +258,54 @@ def live_chart(queue_tx, queue_rx):
             hovermode="x unified",
         )
         st.plotly_chart(fig, width="stretch", theme=None)
-        # Second Chart: Packet Drops Underneath
+
+        # Second Chart: Packet Drops Underneath (NIC, Qdisc & Socket RcvbufErrors)
         drop_fig = go.Figure()
         drop_styles = [
+            ("RX", "RcvbufErrors", "RX UDP RcvbufErrors", "#C77DFF"),
             ("RX", "nic_drops", "RX NIC Drops", "#FF4B4B"),
             ("RX", "qdisc_drops", "RX Qdisc Drops", "#FF85A1"),
             ("TX", "nic_drops", "TX NIC Drops", "#FF9F1C"),
-            ("TX", "qdisc_drops", "TX Qdisc Drops", "#FFD166"),
+            ("TX", "qdisc_drops", "TX Qdisc Drops", "#008000"),
         ]
         for direction, col_name, label, color in drop_styles:
-          sub = df[df["direction"] == direction]
-          if sub.empty:
-            continue
-          drop_fig.add_trace(
-              go.Bar(
-                  x=sub["elapsed_s"],
-                  y=sub[col_name],
-                  name=label,
-                  marker_color=color,
-                  opacity=0.9,
-              )
-          )
+            sub = df[df["direction"] == direction]
+            if sub.empty:
+                continue
+            drop_fig.add_trace(
+                go.Scattergl(
+                    x=sub["elapsed_s"],
+                    y=sub[col_name],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(color=color, width=2, shape="hv"),
+                    marker=dict(size=4),
+                )
+            )
+
+        max_drop = max(
+            df["nic_drops"].max(),
+            df["qdisc_drops"].max(),
+            df["RcvbufErrors"].max(),
+            0,
+        )
+        y_upper = max(5, max_drop * 1.2)
+
         drop_fig.update_layout(
+            uirevision="drop_chart",
             title=dict(
-                text="Packet Drops per Interval (NIC & Qdisc)",
+                text="Packet Drops per Interval (Socket RcvBuf, NIC & Qdisc)",
                 font=dict(color="#F8FAFC", size=15),
             ),
             template="plotly_dark",
             paper_bgcolor="rgba(17, 25, 40, 0.55)",
             plot_bgcolor="rgba(0, 0, 0, 0)",
             font=dict(family="JetBrains Mono, monospace", color="#CBD5E1"),
-            barmode="stack",
             height=300,
             margin=dict(l=15, r=15, t=45, b=15),
             xaxis_title="Elapsed (s)",
             yaxis_title="Dropped Packets",
-            yaxis=dict(rangemode="tozero", gridcolor="rgba(255,255,255,0.06)"),
+            yaxis=dict(range=[0, y_upper], gridcolor="rgba(255,255,255,0.06)"),
             xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
             legend=dict(
                 orientation="h",
@@ -270,6 +321,7 @@ def live_chart(queue_tx, queue_rx):
             hovermode="x unified",
         )
         st.plotly_chart(drop_fig, width="stretch", theme=None)
+
 
 if __name__ == "__main__":
     deadline =  time.monotonic() + duration_seconds

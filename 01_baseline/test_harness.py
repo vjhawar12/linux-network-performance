@@ -209,7 +209,8 @@ class NetworkInterface:
         # Request specific link info including binary attributes
         link_data = ipr.get_links(self.intf_idx)[0]
         # Convert attributes tuple list into a workable dictionary
-        attrs = link_data['attrs']        
+        attrs = link_data['attrs']  
+        timestamp = time.time()      
         # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
         stats = None
         for attr in attrs:
@@ -220,16 +221,16 @@ class NetworkInterface:
             with self.snapshot_lock:
                 for stat in stats.keys():
                     if stat in self.telemetry:
-                        self.telemetry[stat] = (time.time(), stats.get(stat, 0))
+                        self.telemetry[stat] = (timestamp, stats.get(stat, 0))
         else:
             raise NetworkInterfaceException("Could not find IFLA_STATS64")
         qdisc_data = ipr.get_qdiscs(self.intf_idx)[0]
         TCA_STATS2 = qdisc_data.get_attr("TCA_STATS2")
         TCA_STATS_QUEUE = TCA_STATS2.get_attr("TCA_STATS_QUEUE")
-        self.telemetry["qdisc_drops"] = (time.time(), TCA_STATS_QUEUE["drops"])
-        self.telemetry["qdisc_backlog"] = (time.time(), TCA_STATS_QUEUE["backlog"])
-        self.telemetry["qdisc_requeues"] = (time.time(), TCA_STATS_QUEUE["requeues"])
-        # print(self.telemetry)
+        self.telemetry["qdisc_drops"] = (timestamp, TCA_STATS_QUEUE["drops"])
+        self.telemetry["qdisc_backlog"] = (timestamp, TCA_STATS_QUEUE["backlog"])
+        self.telemetry["qdisc_requeues"] = (timestamp, TCA_STATS_QUEUE["requeues"])
+        self.telemetry["RcvbufErrors"] = (timestamp, query_snmp_metric("Udp", "RcvbufErrors"))
 
     def snapshot(self):
         with self.snapshot_lock:
