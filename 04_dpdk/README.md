@@ -1,6 +1,6 @@
-# Stage 4 — C++ DPDK High-Performance Packet Engine
+# Stage 4 — DPDK Userspace Packet I/O Experiment
 
-**Status: long-term plan.** Keep Python lean: configure experiments, supervise a C++ DPDK engine, aggregate telemetry and produce results. C++ owns the high-rate frame TX/RX path and its memory/queue resources.
+**Status: planned.** This experiment continues the raw Ethernet investigation from [AF_PACKET](../02_af_packet/README.md) and [AF_XDP](../03_af_xdp/README.md). It studies how a userspace polling driver changes queue processing, loss visibility, and CPU cost for the same workload. Python will configure runs and collect results, while C++ will own frame TX/RX and queue resources.
 
 [Main roadmap](../README.md) · [Stage 3](../03_af_xdp/README.md) · [Shared design](../common/README.md)
 
@@ -8,7 +8,7 @@
 
 What scaling limits arise from NIC queues, PCIe bandwidth, CPU cores, cache/memory bandwidth, NUMA locality and driver design, and how far can a tuned userspace packet engine push a verified host–switch–host path?
 
-The 100–400 GbE target is a **long-term hardware ambition**, not a guaranteed outcome or a hard limit of DPDK (which also supports lower-speed NICs).
+Begin on available hardware with matched AF_XDP and DPDK workloads. Testing at 100–400 GbE depends on suitable hardware and a verified physical forwarding path.
 
 ## Intended implementation
 
@@ -32,9 +32,9 @@ DPDK counters + receiver stats -> Python reporting
 
 ## Telemetry and caveats
 
-A NIC controlled by DPDK **may not expose the normal Linux network interface** (e.g. some `vfio-pci` configurations). Not every PMD behaves identically. The Python telemetry layer must support backend-specific DPDK port and extended stats alongside independent NIC/switch observations; it cannot require rtnetlink on every port.
+For each PMD, document which statistics are available. Some configurations expose port and queue counters through DPDK directly, so the Python collector should support DPDK statistics and independent switch-port observations alongside any available Linux interface counters.
 
-Avoid binding a management interface to a DPDK driver or sending disruptive traffic over shared links. DPDK does not by itself prove that loss originates in the switch or PHY.
+Use dedicated test interfaces and correlate native DPDK counters with the receiving application and switch ports to attribute losses.
 
 ## Exit criteria
 
