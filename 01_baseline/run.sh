@@ -60,7 +60,7 @@ printf 'Live watch: tail -n +1 -F %q %q\n' "$PWD/$run_dir/tx.txt" "$PWD/$run_dir
   sudo .venv312/bin/python3 test_harness.py "$TX_IF" "$RX_IF" \
     --rx-namespace "$RX_NS" \
     --tx-ip 172.31.251.1 --rx-ip 172.31.251.2 \
-    --bitrate 10G --duration 10 \
+    --bitrate 10G --duration 30 \
     --tx_file "$run_dir/tx.txt" \
     --rx_file "$run_dir/rx.txt" \
     "$socket_path" \
