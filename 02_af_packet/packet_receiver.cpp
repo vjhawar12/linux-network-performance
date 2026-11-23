@@ -29,8 +29,8 @@ PacketReceiver<packet_size>::PacketReceiver(
 }
 
 template<uint32_t packet_size>
-void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, bool cond) {
-    while (cond) {
+void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond) {
+    while (cond()) {
         // using poll prevents blocking forever with recv and never exiting the loop
         ssize_t bytes_recvd = 0;
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(_deadline - std::chrono::steady_clock::now()).count();
@@ -57,14 +57,14 @@ void PacketReceiver<packet_size>::receive(std::atomic<bool>& generator_finished)
     _pollfd.events = POLLIN;
     auto start = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point _deadline = start + std::chrono::seconds(duration_s);
-    _receive(_pollfd, _deadline, !generator_finished);
+    _receive(_pollfd, _deadline, [&generator_finished](){return !generator_finished.load();});
     // drain queue for a short period after generator finishes to catch stragglers
     auto drain_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-    _receive(_pollfd, _deadline, std::chrono::steady_clock::now() < drain_deadline);
+    _receive(_pollfd, drain_deadline, [&drain_deadline](){return std::chrono::steady_clock::now() < drain_deadline;});
     // retrieve socket statistics from PACKET_STATISTICS structure
     // it gets reset upon reading, so we read it once at the end
     struct tpacket_stats stats;
-	socklen_t len;
+	socklen_t len = sizeof(stats);
     if (getsockopt(raw_socket.get_fd(), SOL_PACKET, PACKET_STATISTICS, &stats, &len)) {
         throw PacketReceiverError("Can't retrieve PACKET_STATISTICS: errno = " + std::to_string(errno));
     } else {

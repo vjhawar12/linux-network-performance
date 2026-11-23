@@ -16,7 +16,7 @@ private:
     uint16_t duration_s = 0;
     uint32_t tp_packets;
     uint32_t tp_drops;
-    void _receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, bool cond);
+    void _receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond);
 
 public:
     PacketReceiver(MacAddress dest_mac_address, int intf_idx, uint64_t num_packets_expected, uint16_t duration_s);
