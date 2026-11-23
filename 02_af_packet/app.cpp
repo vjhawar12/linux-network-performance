@@ -70,6 +70,8 @@ int app(int argc, char *argv[]) {
                 std::cerr << e.what() << std::endl;        
                 trecv.join();
                 return 1;
+            } catch (...) {
+                std::cerr << "Unknown exception caught (around generator.generate())!\n";
             }
             results.tx_received = generator.get_tx_received();
             trecv.join();
@@ -83,7 +85,7 @@ int app(int argc, char *argv[]) {
             results.elapsed_time = real_elapsed_time;
             std::tie(results.rx_expected, results.rx_received, results.tp_drops, results.tp_packets) = receiver.get(); 
             results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (real_elapsed_time);
-            results.lp = results.tx_received > 0 && results.rx_received > 0? 100 * (results.tx_received - results.rx_received) / (double)results.tx_received : 0; 
+            results.lp = results.tx_received > 0 && results.rx_received > 0? 100 * (results.tx_received - results.rx_received) / (double)results.tx_received : 100; 
             std::cout << "Frames Requested: " << num_packets << std::endl;
             std::cout << "Frames Submitted (sendto): " << results.tx_received << std::endl;
             std::cout << "Frames Read (recv): " << results.rx_received << std::endl;
@@ -100,7 +102,9 @@ int app(int argc, char *argv[]) {
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
-        } 
+        } catch (...) {
+            std::cerr << "Unknown exception caught!\n";
+        }
     } else {
         return 1;
     }
