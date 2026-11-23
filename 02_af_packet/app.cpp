@@ -21,8 +21,6 @@ int app(int argc, char *argv[]) {
         char* endptr1, *endptr2;
         uint64_t bitrate_s = strtoul(_bitrate_s, &endptr1, 10);
         uint64_t duration_s = strtoul(_duration_s, &endptr2, 10);
-        uint64_t num_packets = (bitrate_s * duration_s) / (PACKET_SIZE_BYTES * 8);
-        results.tx_expected = num_packets;
         char* endptr3;
         uint64_t runid = strtoul(_runid, &endptr3, 10); 
         uint64_t sequence_number = -1; // dummy value, replace this with per-packet ID
@@ -46,7 +44,7 @@ int app(int argc, char *argv[]) {
             std::atomic<bool> generator_finished = false; 
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration_s);
             PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, bitrate_s, deadline, generator_finished); 
-            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets, deadline);
+            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, deadline);
             auto start = std::chrono::steady_clock::now(); 
             std::exception_ptr recv_excptr, general_excptr;
             std::thread trecv([&](){
@@ -84,16 +82,16 @@ int app(int argc, char *argv[]) {
             }
             double real_elapsed_time = std::chrono::duration<double>(end - start).count();
             results.elapsed_time = real_elapsed_time;
-            std::tie(results.rx_expected, results.rx_received, results.tp_drops, results.tp_packets) = receiver.get(); 
+            std::tie(results.rx_received, results.tp_drops, results.tp_packets) = receiver.get(); 
             results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (real_elapsed_time);
             results.lp = results.tx_received > 0 && results.rx_received > 0? 100 * (results.tx_received - results.rx_received) / (double)results.tx_received : 100; 
-            std::cout << "Frames Requested: " << num_packets << std::endl;
+            std::cout << "Expected Throughput (bits per second): " << std::round(bitrate_s) << std::endl;
             std::cout << "Frames Submitted (sendto): " << results.tx_received << std::endl;
             std::cout << "Frames Read (recv): " << results.rx_received << std::endl;
             std::cout << "Individual Frame Size: " << PACKET_SIZE_BYTES << " bytes" << std::endl;
             std::cout << "Individual Payload size: " << PAYLOAD_SIZE_BYTES << " bytes" << std::endl;
             std::cout << "Elapsed time (seconds): " << real_elapsed_time << std::endl;
-            std::cout << "RX Payload Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
+            std::cout << "Achieved Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
             std::cout << "TP Packets: " << results.tp_packets << std::endl;
             std::cout << "TP Drops: " << results.tp_drops << std::endl;
             std::cout << "Loss percentage: " << results.lp << "%" << std::endl;

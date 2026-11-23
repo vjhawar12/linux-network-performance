@@ -9,7 +9,6 @@ template <uint32_t packet_size>
 PacketReceiver<packet_size>::PacketReceiver(
     MacAddress dest_mac_address, 
     int intf_idx,
-    uint64_t num_packets_expected,
     std::chrono::steady_clock::time_point deadline
 ) : 
 deadline(
@@ -17,7 +16,7 @@ deadline(
 ), raw_socket(
     dest_mac_address,
     intf_idx
-), num_packets_expected(num_packets_expected) {
+) {
     buf = new char[packet_size];  
     try {
         raw_socket.bind_socket();
@@ -71,8 +70,8 @@ void PacketReceiver<packet_size>::receive(std::atomic<bool>& generator_finished)
 }
 
 template <uint32_t packet_size>
-std::tuple<uint64_t, uint64_t, uint32_t, uint32_t> PacketReceiver<packet_size>::get() {
-    return std::make_tuple(num_packets_expected, num_packets_received, tp_drops, tp_packets); 
+std::tuple<uint64_t, uint32_t, uint32_t> PacketReceiver<packet_size>::get() {
+    return std::make_tuple(num_packets_received, tp_drops, tp_packets); 
 }
 
 template <uint32_t packet_size>

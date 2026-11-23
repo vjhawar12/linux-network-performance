@@ -53,7 +53,7 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
     int ret = 0; 
     uint64_t sequence_idx = 0; 
     uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8); 
-    while (transmitted_packets < total_packets && !ELAPSED_MS(std::chrono::steady_clock::now(), deadline)) {
+    while (!ELAPSED_MS(std::chrono::steady_clock::now(), deadline)) {
         frame.set_sequence_number(sequence_idx); 
         ret = sendto(
             raw_socket.get_fd(), 

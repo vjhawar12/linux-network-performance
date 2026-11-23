@@ -11,7 +11,6 @@ class PacketReceiver {
 private:
     PacketSocket raw_socket;  
     uint64_t num_packets_received = 0; 
-    const uint64_t num_packets_expected = 0; 
     char* buf = 0; 
     std::chrono::steady_clock::time_point deadline;
     uint32_t tp_packets = 0;
@@ -21,8 +20,8 @@ private:
     void _receive(std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond);
 
 public:
-    PacketReceiver(MacAddress dest_mac_address, int intf_idx, uint64_t num_packets_expected, std::chrono::steady_clock::time_point deadline);
+    PacketReceiver(MacAddress dest_mac_address, int intf_idx, std::chrono::steady_clock::time_point deadline);
     void receive(std::atomic<bool>& generator_finished); 
-    std::tuple<uint64_t, uint64_t, uint32_t, uint32_t> get();
+    std::tuple<uint64_t, uint32_t, uint32_t> get();
     ~PacketReceiver();
 }; 
