@@ -12,6 +12,7 @@
 #include <net/if.h>
 #include <vector>
 #include <stdexcept>
+#include <chrono>
 
 #define ETHERNET_HEADER_BYTES 14
 #define RUN_ID_BYTES 8
@@ -19,6 +20,8 @@
 #define PACKET_SIZE_BYTES 1490
 #define PAYLOAD_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES)
 #define MESSAGE_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES - RUN_ID_BYTES - SEQUENCE_NUMBER_BYTES)
+// return true if deadline elapsed else false
+#define ELAPSED_MS(__now, __deadline) ((std::chrono::duration_cast<std::chrono::milliseconds>(__deadline - __now).count()) <= 0)
 
 class MacAddress {
 private:

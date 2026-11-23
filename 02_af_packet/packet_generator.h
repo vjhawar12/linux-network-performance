@@ -25,7 +25,7 @@ private:
     EthernetFrame<packet_size> frame{};
     PacketSocket raw_socket;  
     uint64_t bitrate_s = 0;
-    uint16_t duration_s = 0;
+    std::chrono::steady_clock::time_point deadline{}; 
     uint64_t transmitted_packets = 0;
     std::atomic<bool>& finished;
 public:
@@ -35,9 +35,9 @@ public:
         int intf_idx, 
         std::array<uint8_t, packet_size - 14>& custom_payload,
         uint64_t bitrate_s,
-        uint16_t duration_s,
+        std::chrono::steady_clock::time_point deadline,
         std::atomic<bool>& finished
     ); 
-    void generate();
+    void generate(uint32_t duration_s);
     unsigned long get_tx_received();
 };

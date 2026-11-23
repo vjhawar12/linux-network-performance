@@ -13,7 +13,7 @@ private:
     uint64_t num_packets_received = 0; 
     const uint64_t num_packets_expected = 0; 
     char* buf = 0; 
-    uint16_t duration_s = 0;
+    std::chrono::steady_clock::time_point deadline;
     uint32_t tp_packets = 0;
     uint32_t tp_drops = 0;
     uint32_t __timeouts = 0;
@@ -21,7 +21,7 @@ private:
     void _receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond);
 
 public:
-    PacketReceiver(MacAddress dest_mac_address, int intf_idx, uint64_t num_packets_expected, uint16_t duration_s);
+    PacketReceiver(MacAddress dest_mac_address, int intf_idx, uint64_t num_packets_expected, std::chrono::steady_clock::time_point deadline);
     void receive(std::atomic<bool>& generator_finished); 
     std::tuple<uint64_t, uint64_t, uint32_t, uint32_t> get();
     ~PacketReceiver();
