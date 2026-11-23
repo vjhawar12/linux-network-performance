@@ -28,7 +28,7 @@ int app(int argc, char *argv[]) {
         uint64_t sequence_number = -1; // dummy value, replace this with per-packet ID
         if (errno == ERANGE || endptr1 == _bitrate_s || endptr2 == _duration_s || endptr3 == _runid) {
             std::cerr << "Invalid argument" << std::endl;
-            return 1;
+            return ERR_ARGS;
         }
         int src_idx = intf_name_to_index(source_intf_name); 
         int dest_idx = intf_name_to_index(destination_intf_name); 
@@ -65,13 +65,14 @@ int app(int argc, char *argv[]) {
             } catch (PacketGeneratorError& e) {
                 std::cerr << "PacketGeneratorError: " << e.what() << std::endl;
                 trecv.join();
-                return 1;
+                return ERR_GENERATE;
             } catch (std::exception& e) {
                 std::cerr << e.what() << std::endl;        
                 trecv.join();
-                return 1;
+                return ERR_UNKNOWN;
             } catch (...) {
                 std::cerr << "Unknown exception caught (around generator.generate())!\n";
+                return ERR_UNKNOWN;
             }
             results.tx_received = generator.get_tx_received();
             trecv.join();
@@ -98,15 +99,16 @@ int app(int argc, char *argv[]) {
             std::cout << "Loss percentage: " << results.lp << "%" << std::endl;
         } catch (PacketReceiverError& e) {
             std::cerr << "PacketReceiverError: " << e.what() << std::endl;
-            return 1;
+            return ERR_RECEIVE;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
-            return 1;
+            return ERR_UNKNOWN;
         } catch (...) {
             std::cerr << "Unknown exception caught!\n";
+            return ERR_UNKNOWN;
         }
     } else {
-        return 1;
+        return ERR_ARGS;
     }
-    return 0;
+    return ERR_NONE;
 }       

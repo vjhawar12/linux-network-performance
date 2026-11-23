@@ -21,7 +21,15 @@
 #define PAYLOAD_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES)
 #define MESSAGE_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES - RUN_ID_BYTES - SEQUENCE_NUMBER_BYTES)
 // return true if deadline elapsed else false
-#define ELAPSED_MS(__now, __deadline) ((std::chrono::duration_cast<std::chrono::milliseconds>(__deadline - __now).count()) <= 0)
+#define ELAPSED_MS(now_, deadline_) ((std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count()) <= 0)
+
+typedef enum err_t {
+    ERR_NONE,
+    ERR_ARGS,
+    ERR_GENERATE,
+    ERR_RECEIVE,
+    ERR_UNKNOWN
+} err_t;
 
 class MacAddress {
 private:

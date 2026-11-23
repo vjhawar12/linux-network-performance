@@ -96,5 +96,5 @@ if __name__ == "__main__":
     print(f"TX bytes: {diff_tx['tx_bytes']}")
     print(f"TX drops: {diff_tx['tx_dropped']}")
     print(f"TX errors: {diff_tx['tx_errors']}")
-    print("\n=== CUSTOM PACKET GENERATOR SUMMARY ===")   
+    print("\n=== PACKET GENERATOR SUMMARY ===")   
     print(result.stdout)
