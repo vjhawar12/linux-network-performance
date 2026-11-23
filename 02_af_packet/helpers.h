@@ -22,6 +22,8 @@
 #define MESSAGE_SIZE_BYTES (PACKET_SIZE_BYTES - ETHERNET_HEADER_BYTES - RUN_ID_BYTES - SEQUENCE_NUMBER_BYTES)
 // return true if deadline elapsed else false
 #define ELAPSED_MS(now_, deadline_) ((std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count()) <= 0)
+#define ELAPSED_1MS(now_) (ELAPSED_MS(now_, now_ + std::chrono::milliseconds(1)))
+#define TIME_LEFT_MS(now_) (std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count())
 
 typedef enum err_t {
     ERR_NONE,

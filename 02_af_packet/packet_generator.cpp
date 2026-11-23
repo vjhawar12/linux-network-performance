@@ -52,23 +52,42 @@ template <uint32_t packet_size>
 void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
     int ret = 0; 
     uint64_t sequence_idx = 0; 
-    uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8); 
+    uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8);
+    uint16_t interval_ms = 200; 
+    uint64_t packets_left_next_interval = total_packets / interval_ms;
+    uint64_t packets_sent_this_interval = 0; 
+    int64_t time_left_ms = 0; 
     while (!ELAPSED_MS(std::chrono::steady_clock::now(), deadline)) {
-        frame.set_sequence_number(sequence_idx); 
-        ret = sendto(
-            raw_socket.get_fd(), 
-            frame.get(),    
-            frame.length(), 
-            0, 
-            reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
-            raw_socket.get_socklen()
-        ); 
-        if (ret == -1) {
-            finished = true;
-            throw PacketGeneratorError("sendto failed with errno = " + std::to_string(errno)); 
+        packets_this_frame = 0;  
+        while (!ELAPSED_1MS(std::chrono::steady_clock::now()) && packets_sent_this_interval < packets_left_next_interval) {
+            frame.set_sequence_number(sequence_idx); 
+            ret = sendto(
+                raw_socket.get_fd(), 
+                frame.get(),    
+                frame.length(), 
+                0, 
+                reinterpret_cast<const sockaddr*>(raw_socket.get_sockaddr()), 
+                raw_socket.get_socklen()
+            ); 
+            if (ret == -1) {
+                finished = true;
+                throw PacketGeneratorError("sendto failed with errno = " + std::to_string(errno)); 
+            } else {
+                transmitted_packets++;
+                packets_sent_this_interval++;
+                sequence_idx++;
+            }
+        }
+        time_left_ms = TIME_LEFT_MS(std::chrono::steady_clock::now());
+        if (time_left_ms > 0) {
+            // busy wait until the next interval
+            high_performance_busy_wait(time_left_ms);     
+            // schedule the usual load
+            packets_left_next_interval = total_packets / interval_ms; 
         } else {
-            transmitted_packets++;
-            sequence_idx++;
+            // compute remaining packets from this interval and schedule them for the next interval
+            // along with the usual load
+            packets_left_next_interval = (total_packets / interval_ms) + (packets_left_next_interval - packets_sent_this_interval); 
         }
     }
     finished = true;
