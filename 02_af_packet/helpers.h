@@ -11,6 +11,7 @@
 #include <linux/if_packet.h>
 #include <net/if.h>
 #include <vector>
+#include <stdexcept>
 
 #define ETHERNET_HEADER_BYTES 14
 #define RUN_ID_BYTES 8
@@ -42,6 +43,16 @@ public:
     size_t length() const; 
 }; 
 
+
+class PacketGeneratorError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class PacketReceiverError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 class PacketSocket {
 private:
@@ -83,6 +94,8 @@ typedef struct results_t {
     unsigned long rx_received;
     unsigned long tx_expected;
     unsigned long tx_received;
+    uint32_t tp_drops;
+    uint32_t tp_packets;
     double throughput_bps;
     double elapsed_time;
 } results_t;

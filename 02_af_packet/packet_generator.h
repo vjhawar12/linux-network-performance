@@ -17,6 +17,7 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include <net/if_arp.h>
 #include <unistd.h>
 #include "helpers.h"
+#include <atomic>
 
 template <uint32_t packet_size>
 class PacketGenerator {
@@ -26,6 +27,7 @@ private:
     uint64_t bitrate_s = 0;
     uint16_t duration_s = 0;
     uint64_t transmitted_packets = 0;
+    std::atomic<bool>& finished;
 public:
     PacketGenerator(
         MacAddress source_mac_address, 
@@ -33,7 +35,8 @@ public:
         int intf_idx, 
         std::array<uint8_t, packet_size - 14>& custom_payload,
         uint64_t bitrate_s,
-        uint16_t duration_s
+        uint16_t duration_s,
+        std::atomic<bool>& finished
     ); 
     void generate();
     unsigned long get_tx_received();

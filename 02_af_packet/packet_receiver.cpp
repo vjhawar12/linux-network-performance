@@ -4,35 +4,35 @@
 #include <utility>
 #include <iostream>
 #include <chrono>
+#include <atomic>
+#include <functional>
 
 template <uint32_t packet_size>
 PacketReceiver<packet_size>::PacketReceiver(
     MacAddress dest_mac_address, 
     int intf_idx,
-    uint64_t num_packets_expected
+    uint64_t num_packets_expected,
+    uint16_t duration_s
 ) : 
     raw_socket(
     dest_mac_address,
     intf_idx
+), duration_s(
+    duration_s
 ), num_packets_expected(num_packets_expected) {
     buf = new char[packet_size];  
     try {
         raw_socket.bind_socket();
     } catch (std::exception& e) {
-        std::cerr << e.what() << std::endl;
+        throw PacketReceiverError("Unable to bind socket!");
     }
 }
 
-template <uint32_t packet_size>
-void PacketReceiver<packet_size>::receive(uint16_t deadline_seconds) {
-    ssize_t bytes_recvd = 0;
-    pollfd _pollfd{};
-    _pollfd.fd = raw_socket.get_fd();
-    _pollfd.events = POLLIN;
-    auto start = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point _deadline = start + std::chrono::seconds(deadline_seconds);
-    while (num_packets_received < num_packets_expected && std::chrono::steady_clock::now() < _deadline) {
+template<uint32_t packet_size>
+void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, bool cond) {
+    while (cond) {
         // using poll prevents blocking forever with recv and never exiting the loop
+        ssize_t bytes_recvd = 0;
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(_deadline - std::chrono::steady_clock::now()).count();
         poll(&_pollfd, 1, diff); 
         if (_pollfd.revents & POLLIN) {
@@ -43,16 +43,39 @@ void PacketReceiver<packet_size>::receive(uint16_t deadline_seconds) {
                 } else {
                     perror("recv error");
                 }
-                continue;
-            } 
-            num_packets_received++;
+            } else {
+                num_packets_received++;
+            }
         }
     }
 }
 
 template <uint32_t packet_size>
-std::pair<uint64_t, uint64_t> PacketReceiver<packet_size>::get() {
-    return std::make_pair(num_packets_expected, num_packets_received); 
+void PacketReceiver<packet_size>::receive(std::atomic<bool>& generator_finished) {
+    pollfd _pollfd{};
+    _pollfd.fd = raw_socket.get_fd();
+    _pollfd.events = POLLIN;
+    auto start = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point _deadline = start + std::chrono::seconds(duration_s);
+    _receive(_pollfd, _deadline, !generator_finished);
+    // drain queue for a short period after generator finishes to catch stragglers
+    auto drain_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    _receive(_pollfd, _deadline, std::chrono::steady_clock::now() < drain_deadline);
+    // retrieve socket statistics from PACKET_STATISTICS structure
+    // it gets reset upon reading, so we read it once at the end
+    struct tpacket_stats stats;
+	socklen_t len;
+    if (getsockopt(raw_socket.get_fd(), SOL_PACKET, PACKET_STATISTICS, &stats, &len)) {
+        throw PacketReceiverError("Can't retrieve PACKET_STATISTICS: errno = " + std::to_string(errno));
+    } else {
+        tp_drops = stats.tp_drops;
+        tp_packets = stats.tp_packets;
+    }
+}
+
+template <uint32_t packet_size>
+std::tuple<uint64_t, uint64_t, uint32_t, uint32_t> PacketReceiver<packet_size>::get() {
+    return std::make_tuple(num_packets_expected, num_packets_received, tp_drops, tp_packets); 
 }
 
 template <uint32_t packet_size>

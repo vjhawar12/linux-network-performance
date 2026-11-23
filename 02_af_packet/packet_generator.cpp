@@ -22,6 +22,7 @@ as to what is the real upper limit of packet throughput that the switch can hand
 #include "helpers.h"
 #include "packet_generator.h"
 #include <chrono>
+#include <atomic>
 
 template <uint32_t packet_size>
 PacketGenerator<packet_size>::PacketGenerator(
@@ -30,7 +31,8 @@ PacketGenerator<packet_size>::PacketGenerator(
     int intf_idx, 
     std::array<uint8_t, packet_size - 14>& custom_payload,
     uint64_t bitrate_s,
-    uint16_t duration_s
+    uint16_t duration_s,
+    std::atomic<bool>& finished
 ) : frame(
     source_mac_address, 
     dest_mac_address, 
@@ -38,6 +40,8 @@ PacketGenerator<packet_size>::PacketGenerator(
     custom_payload.size()
 ), raw_socket(
     dest_mac_address, intf_idx
+), finished(
+   finished
 ) {
     this->bitrate_s = bitrate_s;  
     this->duration_s = duration_s;  
@@ -47,7 +51,7 @@ template <uint32_t packet_size>
 void PacketGenerator<packet_size>::generate() {
     int ret = 0; 
     uint64_t sequence_idx = 0; 
-    uint64_t total_packets = bitrate_s * duration_s; 
+    uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8); 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(duration_s);
     while (transmitted_packets < total_packets && std::chrono::steady_clock::now() < deadline) {
         frame.set_sequence_number(sequence_idx); 
@@ -60,11 +64,13 @@ void PacketGenerator<packet_size>::generate() {
             raw_socket.get_socklen()
         ); 
         if (ret == -1) {
-            throw std::runtime_error("sendto failed with errno = " + std::to_string(errno)); 
+            throw PacketGeneratorError("sendto failed with errno = " + std::to_string(errno)); 
         } else {
             transmitted_packets++;
+            sequence_idx++;
         }
     }
+    finished = true;
 }
 
 template <uint32_t packet_size>

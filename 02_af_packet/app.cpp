@@ -5,6 +5,7 @@
 #include <thread>
 #include <array>
 #include <cmath>
+#include <atomic>
 
 results_t results{}; 
 
@@ -42,15 +43,20 @@ int app(int argc, char *argv[]) {
             std::memcpy(message, _message, strnlen(_message, MESSAGE_SIZE_BYTES)); 
             std::memcpy(payload.data(), &runid, sizeof(runid)); 
             std::memcpy(payload.data() + RUN_ID_BYTES, &sequence_number, sizeof(sequence_number)); 
-            std::memcpy(payload.data() + RUN_ID_BYTES + SEQUENCE_NUMBER_BYTES, message, MESSAGE_SIZE_BYTES); 
-            PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, bitrate_s, duration_s); 
-            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets);
+            std::memcpy(payload.data() + RUN_ID_BYTES + SEQUENCE_NUMBER_BYTES, message, MESSAGE_SIZE_BYTES);
+            std::atomic<bool> generator_finished = false; 
+            PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, bitrate_s, duration_s, generator_finished); 
+            PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets, duration_s);
             auto start = std::chrono::steady_clock::now(); 
-            std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, 10); // 10 second deadline
+            std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, std::ref(generator_finished)); // 10 second deadline
             auto end = std::chrono::steady_clock::now(); 
             try {
                 generator.generate();
                 end = std::chrono::steady_clock::now();
+            } catch (PacketGeneratorError& e) {
+                std::cerr << "PacketGeneratorError: " << e.what() << std::endl;
+                trecv.join();
+                return 1;
             } catch (std::exception& e) {
                 std::cerr << e.what() << std::endl;        
                 trecv.join();
@@ -60,8 +66,7 @@ int app(int argc, char *argv[]) {
             trecv.join();
             double elapsed_time = std::chrono::duration<double>(end - start).count();
             results.elapsed_time = elapsed_time;
-            results.rx_expected = receiver.get().first;
-            results.rx_received = receiver.get().second;
+            std::tie(results.rx_expected, results.rx_received, results.tp_drops, results.tp_packets) = receiver.get(); 
             results.throughput_bps = (results.rx_received * PAYLOAD_SIZE_BYTES * 8) / (elapsed_time);
             std::cout << "Frames Requested: " << num_packets << std::endl;
             std::cout << "Frames Submitted (sendto): " << results.tx_received << std::endl;
@@ -70,7 +75,12 @@ int app(int argc, char *argv[]) {
             std::cout << "Individual Payload size: " << PAYLOAD_SIZE_BYTES << " bytes" << std::endl;
             std::cout << "Elapsed time (seconds): " << elapsed_time << std::endl;
             std::cout << "RX Payload Throughput (bits per second): " << std::round(results.throughput_bps) << std::endl;
-            std::cout << "Loss percentage: " << 100 * (results.rx_expected - results.rx_received) / (double)results.rx_expected << "%" << std::endl;
+            std::cout << "TP Packets: " << results.tp_packets << std::endl;
+            std::cout << "TP Drops: " << results.tp_drops << std::endl;
+            std::cout << "Loss percentage: " << 100 * (results.tx_received - results.rx_received) / (double)results.tx_received << "%" << std::endl;
+        } catch (PacketReceiverError& e) {
+            std::cerr << "PacketReceiverError: " << e.what() << std::endl;
+            return 1;
         } catch (std::exception& e) {
             std::cerr << e.what() << std::endl; 
             return 1;
