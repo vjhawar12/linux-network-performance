@@ -1,6 +1,6 @@
 # Shared Architecture — Python Control Plane and C++ Traffic Engines
 
-**Status.** Stage 1 now has a [test runner](../01_baseline/common_test_harness.py) for setup, telemetry, client execution, and reporting, plus an [iperf3 module](../01_baseline/packet_generation.py) for server launch and client command construction. Both live in Stage 1. A shared runner is planned once Stage 2 has exercised its own send and receive path.
+[Stage 1](../01_baseline/README.md) is the throughput and loss tool. Its [test runner](../01_baseline/test_harness.py) manages the benchmark and samples Linux counters for the [live dashboard](../01_baseline/display_gui.py). [Stage 2](../02_af_packet/README.md) has a separate [Python harness](../02_af_packet/test_harness.py) for its C++ Layer 2 experiment. The shared runner below is a design for future packet-path experiments.
 
 ## Responsibility split
 
@@ -42,4 +42,4 @@ Every backend should expose:
 
 Structured JSON can work initially for control and final results, even if the engine itself is a separate process. High-rate frame data should stay entirely in C++.
 
-Keep the same Layer 2 test payload across Stages 2–4, and comparable Ethernet frame lengths and offered loads. Stage 1 UDP/iperf3 is a reference but differs in protocol overhead and loss-accounting semantics.
+Use the same Layer 2 test payload across Stages 2–4. For comparisons with Stage 1, match Ethernet frame lengths and offered loads and identify the source and scope of each loss measurement. The UDP benchmark exposes socket-level loss, and the raw Ethernet experiments use frame-level observations.

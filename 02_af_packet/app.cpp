@@ -22,7 +22,7 @@ int app(int argc, char *argv[]) {
         char* endptr1, *endptr2;
         uint64_t bitrate_s = strtoul(_bitrate_s, &endptr1, 10);
         uint64_t duration_s = strtoul(_duration_s, &endptr2, 10);
-        uint64_t num_packets = bitrate_s * duration_s; 
+        uint64_t num_packets = (bitrate_s * duration_s) / (PACKET_SIZE_BYTES * 8);
         results.tx_expected = num_packets;
         char* endptr3;
         uint64_t runid = strtoul(_runid, &endptr3, 10); 

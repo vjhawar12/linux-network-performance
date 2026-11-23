@@ -1,16 +1,21 @@
-# Stage 1 — Python + iperf3 Baseline
+# Stage 1 — UDP Throughput and Packet Loss
 
-**Status (18 November 2026).** The Python runner completed virtual Ethernet smoke tests at aggregate UDP targets of 100 Mb/s, 1 Gb/s, 3 Gb/s, and 10 Gb/s. The 10 Gb/s target was tested with one and four streams, and unpaced trials used four and ten streams. A follow-up paced 3 Gb/s test now includes a screenshot of nonzero RX-namespace UDP receive-buffer errors. Physical 10 GbE switch testing is still planned. This stage provides a UDP/IP reference for [AF_PACKET](../02_af_packet/README.md), [AF_XDP](../03_af_xdp/README.md), and [DPDK](../04_dpdk/README.md).
+Stage 1 measures UDP throughput and packet loss between two Linux interfaces. The Python harness runs iperf3, records host counters along the packet path, and publishes TX and RX snapshots to a live Streamlit dashboard. The current launcher runs on a virtual Ethernet pair. A physical 10 GbE switch test is planned.
 
-## TLDR for stage 1
+[Watch the Stage 1 dashboard demo](../screenshots/veth-smoke-tests/linux_network_performance_stage1_demo.mp4).
 
-**Best observed veth run below a 0.5% UDP loss threshold:** 2.680 Gb/s with 0.166% iperf3 UDP loss (four unpaced streams). **Highest reported aggregate UDP bitrate:** 7.387 Gb/s with 35.614% UDP loss (ten unpaced streams). These are virtual Ethernet results, not measured physical NIC or switch throughput.
+## What the tool reports
 
-**UDP receive-buffer exhaustion observed:** In a *separate*, paced ten-stream, 3 Gb/s veth run on 18 November 2026, the RX namespace's `/proc/net/snmp` reported **151,980 `Udp:RcvbufErrors`** after the test. The same terminal capture shows **2.998 Gb/s** reported aggregate UDP bitrate, **5.861%** iperf3 UDP loss, and **0 TX interface drops**. This is direct evidence that the UDP receive-buffer limit was hit in that run. It does **not** prove that every lost datagram in that run, or all 35.614% loss in the earlier unpaced run, came from this queue. The current harness collects this UDP counter after traffic, without a before/after delta. [Screenshot](../screenshots/veth-smoke-tests/RcvBufErrorsProof.png).
+| Source | Measurements |
+| --- | --- |
+| iperf3 sender and receiver | Sender bitrate and datagrams sent, receiver goodput, datagram loss count and percentage, and jitter. |
+| Linux interfaces and TX queue | TX/RX packet and byte counts, interface drops and errors, and TX qdisc drops, backlog, and requeues. |
+| Linux UDP receive path | Post-run cumulative `Udp:RcvbufErrors` from `/proc/net/snmp` in the veth receiver namespace. |
+| Live dashboard | TX and RX throughput from interface byte-counter deltas, raw and smoothed traces, and per-interval interface and qdisc drop counters. |
 
-**Data path:** In these tests, iperf3 passes UDP data through the kernel's UDP/IP processing, then through an in-kernel veth peer, and ultimately to the receiver's UDP socket queue and application. There are **no physical NIC descriptor rings or DMA transfers** in this virtual test. A packet can be counted at the RX interface but later discarded if the UDP socket queue cannot accept it. Increasing the socket receive buffer can absorb short bursts, but cannot indefinitely compensate for a sustained arrival rate above the application's consumption rate.
+Use the iperf3 receiver summary for end-to-end datagram loss. Read interface and qdisc drop series by checkpoint because their scopes can overlap. The dashboard currently tracks Linux counters. UDP receive-buffer errors are reported in the terminal summary, and switch-port collection is planned.
 
-## Stage 1 Packet Data Path & Bottleneck Location
+## UDP packet path
 
 ```mermaid
 flowchart TD
@@ -45,9 +50,9 @@ The bitrate-targeted and unpaced trials ran on one Linux host. The iperf3 client
 | Median gap between logged snapshots (TX / RX) | 10.002 / 9.999 ms | 10.000 / 10.000 ms | 9.999 / 10.000 ms | 10.000 / 10.000 ms |
 | Longest gap between logged snapshots (TX / RX) | 63.932 / 62.982 ms | 34.962 / 38.537 ms | 32.290 / 34.122 ms | 50.781 / 42.418 ms |
 
-Bitrate, loss, jitter, and interface counters come from the terminal summaries. The script reads iperf3's `end.sum` field, and snapshot gaps use adjacent timestamps in the TX and RX logs. At the same 10 Gb/s aggregate target, the four-stream smoke test reported 2.45× the bitrate of the single-stream smoke test and reached 26.0% of the target. The saved summaries contain aggregate measurements. Separate sender, receiver, and per-stream rates require the full iperf3 report.
+Bitrate, loss, jitter, and interface counters come from the terminal summaries. The historical runner read iperf3's aggregate `end.sum` field. The current runner reads `end.sum_sent` and `end.sum_received` separately. Snapshot gaps in the table use adjacent timestamps in the saved TX and RX logs. At the same 10 Gb/s aggregate target, the four-stream smoke test reported 2.45× the bitrate of the single-stream smoke test and reached 26.0% of the target.
 
-iperf3 estimates UDP loss from sequence gaps at the receiving application. The Linux `tx_dropped` and `rx_dropped` counters track drops at the interfaces. A datagram can reach the RX interface and be discarded later if the UDP socket's receive buffer is full. The original saved trials contain no UDP socket counters, so their loss location was not directly measured. A later paced 3 Gb/s run confirms that RX-side UDP receive-buffer errors do occur under load; it does not retrospectively establish the loss breakdown for the older trials. The independent TX and RX snapshot boundaries also make the packet-total difference unsuitable for loss accounting. Future reruns should compare `Udp:RcvbufErrors` before and after the test inside the RX namespace, before the launcher removes it. [iperf3 UDP loss accounting](https://github.com/esnet/iperf/discussions/1680) · [Linux interface counter definitions](https://docs.kernel.org/networking/statistics.html#struct-rtnl-link-stats64)
+iperf3 estimates UDP loss from sequence gaps at the receiving application. Linux `tx_dropped` and `rx_dropped` cover interface checkpoints. A datagram can reach the RX interface and then be discarded at the UDP socket queue. The original trial logs contain interface snapshots with independent TX and RX boundaries, so the exact location of those losses remains unverified. [iperf3 UDP loss accounting](https://github.com/esnet/iperf/discussions/1680) · [Linux interface counter definitions](https://docs.kernel.org/networking/statistics.html#struct-rtnl-link-stats64)
 
 | Aggregate UDP target and stream count | Terminal summary | Counter logs | Screenshot |
 | --- | --- | --- | --- |
@@ -81,9 +86,7 @@ A separate **ten-stream, paced 3 Gb/s target** veth run (`-P 10 -b 300M`, 10 sec
 
 ![Terminal evidence: 3 Gb/s test reports 151,980 RX-namespace UDP receive-buffer errors and 5.861% iperf3 loss](../screenshots/veth-smoke-tests/RcvBufErrorsProof.png)
 
-The nonzero `RcvbufErrors` counter demonstrates that **UDP receive-buffer exhaustion occurred** in this run, despite zero TX interface drops. It is consistent with the receiver's UDP socket queue being unable to accept all incoming datagrams at this workload. This finding strengthens the receive-side bottleneck hypothesis, but it does not prove that buffer exhaustion explains *all* iperf3 loss, nor does it prove the cause of loss in the separate 7.387 Gb/s unpaced trial.
-
-The current `query_snmp_metric()` implementation correctly reads the counter using `ip netns exec`, but only **after** traffic. Since the harness creates a fresh namespace for each test, the post-run counter is informative; nevertheless, capture explicit pre/post values for `RcvbufErrors` and `InErrors` in a future run to obtain a reproducible test-interval delta. The new screenshot is a distinct 3 Gb/s run, **not** the previously recorded 3 Gb/s trial above (which had 1.860% UDP loss).
+The counter confirms that **UDP receive-buffer exhaustion occurred in this run**. The follow-up and the earlier unpaced run used different workloads, and the earlier run left the loss location unresolved. A pre/post `RcvbufErrors` delta in the configured receiver namespace would give future trials a count tied to the test interval.
 
 ### Unpaced packet rate
 
@@ -98,28 +101,28 @@ Two four-stream trials and two ten-stream trials used `-b 0` over the same veth 
 
 The second ten-stream trial ran after the harness split and produced the highest observed average at **636,625 TX interface packets/s** over the 10.011 s TX snapshot interval. That is **2.76×** the best four-stream average. The rate divides the TX counter delta by the elapsed time between the two TX snapshots used in the summary. The interface tally includes any control traffic counted during that interval.
 
-Both ten-stream trials recorded zero TX or RX interface drops or errors alongside **34.793–35.614% UDP loss**. The second trial counted **6,369,796 RX interface packets**. The interface counters describe packets at the veth devices, while iperf3 estimates UDP loss from sequence gaps at the receiving application. The original unpaced captures do not contain UDP receive-buffer counters, so the exact drop location in those runs remains unverified. A later paced 3 Gb/s run independently confirmed UDP receive-buffer exhaustion under load (see above). The reported UDP bitrates come from iperf3's aggregate `end.sum`. Receiver goodput requires separate receiver output.
+Both ten-stream trials recorded zero TX or RX interface drops or errors alongside **34.793–35.614% UDP loss**. The second trial counted **6,369,796 RX interface packets**. The loss location remains unresolved because these captures only recorded interface and application measurements.
 
 [Four-stream screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput.png) · [First ten-stream trial screenshot](../screenshots/veth-smoke-tests/01_baseline_max_throughput_10_streams.png)
 
-### Reproduce the paced and unpaced smoke tests
+## Run the benchmark and dashboard
 
-Install Python 3.12 with venv support, `iperf3`, and `iproute2` on a Linux host. The launcher uses `sudo` to create the veth pair and configure the RX namespace. From the repository root:
+Use a Linux host with Python 3.12 and venv support, `iproute2`, and an iperf3 version that includes UDP `sum_sent` and `sum_received` in its JSON output. The launcher uses `sudo` to create the veth pair and configure the receiver namespace. From the repository root:
 
 ```bash
 cd 01_baseline
 python3.12 -m venv .venv312
-.venv312/bin/python3 -m pip install psutil pyroute2
-./run.sh
+.venv312/bin/python3 -m pip install psutil pyroute2 streamlit plotly pandas numpy
+bash run.sh
 ```
 
-[`run.sh`](run.sh) uses fixed interface names and the `172.31.251.0/24` test subnet. It removes leftover interfaces with those names and recreates the named RX namespace, so reserve the names for this test and run one instance at a time. Python 3.12's Linux `fork` default lets workers inherit the current script's stop event. Python 3.14's `forkserver` default requires passing that event explicitly to the workers.
+1. Open `http://localhost:8501` when prompted. The launcher waits for the dashboard to bind its Unix socket before starting the harness.
+2. Watch TX and RX throughput on the same graph and inspect the per-interval drop chart. The harness targets 10 ms snapshots and publishes batches about once per second.
+3. Read `summary.txt`, `tx.txt`, and `rx.txt` in the printed `results/veth-100m-*/` directory. Press Ctrl+C after viewing the dashboard.
 
-The checked-in launcher passes `--bitrate 300M --duration 10` to [`common_test_harness.py`](common_test_harness.py). The client command in [`packet_generation.py`](packet_generation.py) uses `-b 300M -P 10` for the paced 3 Gb/s trial. Set `--bitrate 0` in `run.sh` to repeat the unpaced ten-stream test. Use the [unpaced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/e3a351b830c9458dd0b79cc26dac2dd56fcbe89d/01_baseline) to reproduce the `-P 4 -b 0` comparison. The [paced four-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/6d46e3e556b41db366a336534cca06ccb80d06e7/01_baseline) used a final `-b 2.5G` for a 10 Gb/s aggregate target.
+The current [`run.sh`](run.sh) requests 10 Gb/s UDP for 30 seconds with one stream. The dashboard also listens for 30 seconds, starting when the page loads. Increase the final argument on the Streamlit command to allow time for startup and the last telemetry batch in a full 30-second run. The launcher uses `veth-tx02`, `veth-rx02`, `rxbench-veth-02`, and `172.31.251.0/24`. Reserve those names and addresses for the test, as the launcher removes leftover test interfaces and the harness recreates the receiver namespace.
 
-Use the [single-stream revision](https://github.com/vjhawar12/linux-network-performance/tree/8a3e6ba3cca71654b0b73b0365a4bbfa957239e9/01_baseline) for the original comparison. In that revision, `--bitrate 10G`, `1G`, or `100M` in `run.sh` sets the single-stream target.
-
-The launcher creates a fresh `results/veth-100m-*/` directory for each run and writes `summary.txt`, `tx.txt`, and `rx.txt`. The published bitrate-targeted folders are named by aggregate UDP target and stream count. It prints a `tail -F` command to follow the logs in batches about once per second.
+Historical logs include runs with other stream counts and durations. Use the [single-stream](https://github.com/vjhawar12/linux-network-performance/tree/8a3e6ba3cca71654b0b73b0365a4bbfa957239e9/01_baseline), [paced four-stream](https://github.com/vjhawar12/linux-network-performance/tree/6d46e3e556b41db366a336534cca06ccb80d06e7/01_baseline), or [unpaced four-stream](https://github.com/vjhawar12/linux-network-performance/tree/e3a351b830c9458dd0b79cc26dac2dd56fcbe89d/01_baseline) revisions to reproduce those configurations.
 
 ## Planned physical 10 GbE test
 
@@ -136,19 +139,7 @@ Linux host / default netns         Same host / rxbench netns
 
 Candidate ports: Intel X710 `enp23s0f0np0` and `enp23s0f1np1`. Confirm physical cabling, switch forwarding, interface ownership, and addressing before attempting an experiment. A separate RX namespace prevents unintended local IP delivery when both NICs belong to the same machine.
 
-## Current code
-
-- [`run.sh`](run.sh) creates the veth pair, makes a run directory, and invokes the Python harness.
-- [`common_test_harness.py`](common_test_harness.py) owns the CLI, namespace and interface configuration, traffic test timing, iperf3 client execution and JSON parsing, and reporting. It uses per-interface worker processes for Netlink counters and link events. Asyncio tasks drain their snapshots through pipes and append them to the TX/RX logs.
-- [`packet_generation.py`](packet_generation.py) starts the iperf3 server inside the RX namespace and builds the iperf3 client command. The client sends UDP traffic, and the server receives it.
-
-The runner lives in Stage 1. The [shared design](../common/README.md) describes how setup, telemetry, and reporting can be reused across backends.
-
-## Requirements and safety
-
-Linux, Python, `psutil`, `pyroute2`, `iperf3`, `iproute2`, `ethtool`, and appropriate permissions for interface/network-namespace configuration.
-
-Read-only checks:
+Use `ip` and `ethtool` to check the proposed physical interfaces before a hardware run:
 
 ```bash
 ip -br address
@@ -158,16 +149,16 @@ ethtool -i enp23s0f1np1
 ethtool -S enp23s0f0np0
 ```
 
-**Example command for the planned physical test.** Use dedicated interfaces and addresses assigned to the test.
+The current launcher is configured for veth, and the UDP counter reader uses the fixed `rxbench-veth-02` namespace. Before adapting the harness to physical ports, pass the selected RX namespace to the counter reader and validate the port mapping through the switch.
 
-```bash
-sudo 01_baseline/.venv312/bin/python3 01_baseline/common_test_harness.py \
-  enp23s0f0np0 enp23s0f1np1 \
-  --tx-ip 172.31.250.1 --rx-ip 172.31.250.2 \
-  --rx-namespace rxbench --bitrate 1G --duration 10
-```
+## Current code
 
-The current iperf3 client uses ten streams, so the example's `--bitrate 1G` requests 1 Gb/s per stream and 10 Gb/s in aggregate. The script assigns /24 addresses and can remove an existing namespace named by the CLI. Use a dedicated test namespace and interfaces.
+- [`run.sh`](run.sh) creates the veth pair and run directory, starts Streamlit, and then invokes the harness.
+- [`test_harness.py`](test_harness.py) manages the interfaces and receiver namespace, polls rtnetlink counters, runs iperf3, and writes the summary. Monitor tasks log the snapshots and publish them to the dashboard over a Unix datagram socket.
+- [`packet_generation.py`](packet_generation.py) starts the iperf3 server inside the RX namespace and builds the UDP client command.
+- [`display_gui.py`](display_gui.py) receives TX and RX samples and renders the throughput and drop charts.
+
+The [shared design](../common/README.md) describes how setup, telemetry, and reporting can be reused across backends.
 
 ## Measurement and lifecycle limitations
 
@@ -177,18 +168,8 @@ The current iperf3 client uses ten streams, so the example's `--bitrate 1G` requ
 4. **Error and cleanup handling.** Add bounded startup waits, worker failure reporting, and explicit handling of iperf3 errors. Snapshot buffers grow throughout the run.
 5. **Timing.** Add monotonic timestamps at each counter read to measure collection intervals and missed deadlines independently of snapshot serialization.
 
-## Measurement plan
+## Next measurements
 
-Collect application UDP throughput, lost datagrams and jitter; **before/after `Udp:RcvbufErrors` and `Udp:InErrors` inside the RX namespace**; Linux NIC counters such as `tx_packets`, `rx_packets`, `tx_dropped`, `rx_dropped`, `rx_errors`, `rx_crc_errors`, and `rx_missed_errors`; link events; and `ethtool -S` / switch-port counters when available.
-
-Counter semantics vary by layer. iperf3 receiver loss is not the same metric as hardware CRC errors or NIC `rx_dropped`. The kernel and NIC may update counters less frequently than polling occurs. Record actual collection timestamps and the offered payload rate versus Ethernet line rate. Integrate physical shaker-table telemetry later for precise mechanical correlation.
-
-## Stage 1 exit criteria
-
-- The bitrate-targeted and unpaced veth smoke tests have summaries and TX/RX logs. Repeat the trials and check startup, error handling, and shutdown across runs.
-- A known switch path is checked physically, not assumed.
-- iperf3 completes, and validated before/after counter samples plus reproducible test settings are saved.
-- Errors and shutdown do not strand the child processes or damage unrelated network configuration.
-- Repeatable tests provide a baseline for [custom raw Ethernet](../02_af_packet/README.md).
-
-Once functional, freeze a known Stage 1 revision for future comparisons. More elaborate error recovery or memory/performance optimization can follow observed problems; basic safety and sample correctness cannot.
+- Record pre/post `Udp:RcvbufErrors` in the configured RX namespace and add switch-port packet counts, discards, and errors for the hardware bench.
+- Verify static traffic across the physical switch, then correlate host and switch counters with shaker-table telemetry during vibration tests.
+- Use [Stage 2](../02_af_packet/README.md) to investigate a shorter Layer 2 path and compare loss and throughput under matched workloads. Stage 1 supplies the UDP/IP reference, including the receive socket queue as an observable drop point.

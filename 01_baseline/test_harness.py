@@ -12,6 +12,7 @@ from multiprocessing import Process, Event, Pipe
 import asyncio
 from select import select
 import packet_generation
+import socket
 
 """ 
 Sending packets from one network interface to another on the linux machine with the switch in between 
@@ -67,6 +68,9 @@ class NetworkInterface:
             "tx_bytes",
             "tx_dropped",
             "tx_errors",
+            "qdisc_drops",
+            "qdisc_backlog",
+            "qdisc_requeues",
         ),
         "RX" : (
             "rx_packets",
@@ -164,7 +168,6 @@ class NetworkInterface:
                 readable, _, _ = select([ipr], [], [], 0.25)
                 if not readable:
                     continue
-
                 for msg in ipr.get():
                     if msg.get("event") != "RTM_NEWLINK":
                         continue
@@ -190,9 +193,9 @@ class NetworkInterface:
             and not name.lower().startswith(wireless_prefixes)
             and name != 'lo'
         }
-        print("Available Network Interfaces:\n")
+        print("Wired Network Interfaces:")
         for intf_name, address in wired_interfaces.items():
-            print(f"Interface name: {intf_name} Address: {address}")
+            print(f"Interface name: {intf_name} Address: {address[0].address}")
 
     # call this regularly preferably in its own thread to track packet drop and errors
     # inspect statistics like packet drop and throughput for a network interface 
@@ -206,7 +209,8 @@ class NetworkInterface:
         # Request specific link info including binary attributes
         link_data = ipr.get_links(self.intf_idx)[0]
         # Convert attributes tuple list into a workable dictionary
-        attrs = link_data['attrs']        
+        attrs = link_data['attrs']  
+        timestamp = time.time()      
         # 'IFLA_STATS64' contains the exact mirror of the /sys/../statistics files and returns the 64 bit version
         stats = None
         for attr in attrs:
@@ -217,9 +221,16 @@ class NetworkInterface:
             with self.snapshot_lock:
                 for stat in stats.keys():
                     if stat in self.telemetry:
-                        self.telemetry[stat] = (time.time(), stats.get(stat, 0))
+                        self.telemetry[stat] = (timestamp, stats.get(stat, 0))
         else:
-            raise NetworkInterfaceException("Could not find IFLA_STATS64")        
+            raise NetworkInterfaceException("Could not find IFLA_STATS64")
+        qdisc_data = ipr.get_qdiscs(self.intf_idx)[0]
+        TCA_STATS2 = qdisc_data.get_attr("TCA_STATS2")
+        TCA_STATS_QUEUE = TCA_STATS2.get_attr("TCA_STATS_QUEUE")
+        self.telemetry["qdisc_drops"] = (timestamp, TCA_STATS_QUEUE["drops"])
+        self.telemetry["qdisc_backlog"] = (timestamp, TCA_STATS_QUEUE["backlog"])
+        self.telemetry["qdisc_requeues"] = (timestamp, TCA_STATS_QUEUE["requeues"])
+        self.telemetry["RcvbufErrors"] = (timestamp, query_snmp_metric("Udp", "RcvbufErrors"))
 
     def snapshot(self):
         with self.snapshot_lock:
@@ -331,14 +342,15 @@ async def generate_traffic_async(rx, tx, bitrate, duration):
     if err:
         print(f"Kernel/Process Error Captured: {err.decode('utf-8')}")
     report = json.loads(data.decode('utf-8'))
-    summary = report["end"]["sum"]
-    return summary
+    summary_sent = report["end"]["sum_sent"]
+    summary_recvd = report["end"]["sum_received"]
+    return summary_sent, summary_recvd
 
 # continuous real-time monitoring of packet statistics
 # this method might return later than when the timestamp was actually taken
 # but it returns the earlier timestamp which is correctly associated with the data
 # scheduled with asyncio.create_task
-async def monitor(conn, buffer, fname):
+async def monitor(is_tx, conn, buffer, fname, client):
     _timestamp_ms = time.monotonic_ns() / 1E6
     length = 0
     while not NetworkInterfaceProcess.stop_collection.is_set():
@@ -347,22 +359,31 @@ async def monitor(conn, buffer, fname):
             # collect and push the data to the buffer
             data, timestamp_ms = await asyncio.to_thread(conn.recv)
             buffer.append((data, timestamp_ms))
-        # every 1s publish the data collected so its responsive without 
+        # every 200ms publish the data collected so its responsive without 
         # too much overhead of file I/O. don't require high performance timer here
         # since this isn't a strict deadline
         if time.monotonic_ns() / 1E6 - _timestamp_ms > 1000:
             _timestamp_ms = time.monotonic_ns() / 1E6
-            publish(buffer[length:], fname)
+            publish(is_tx, buffer[length:], fname, client)
             length = len(buffer)
         # sleep for 5 ms to avoid 100% cpu spin while catching the data arriving every 10ms
         await asyncio.sleep(0.005)
     # publish one last time to include the last chunk of data
-    publish(buffer[length:], fname)
+    publish(is_tx, buffer[length:], fname, client)
 
-def publish(buffer, fname):
+def publish(is_tx, buffer, fname, client):
     with open(fname, 'a') as f:
+        message = None
+        record = dict()
         for line in buffer:
-            f.write(f"Timestamp ms: {line[1]} Data: {line[0]}\n")
+            message = f"{"TX" if is_tx else "RX"} Timestamp ms: {line[1]} Data: {line[0]}\n"
+            f.write(message)
+            record.update({
+                "TX" : is_tx,
+                "timestamp_ms" : line[1],
+                "data" : line[0]
+            })
+            client.send(json.dumps(record).encode("utf-8"))
 
 def query_snmp_metric(protocol: str, target_key: str, filepath: str = "/proc/net/snmp"):
     prefix = f"{protocol}:"
@@ -398,7 +419,7 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     tx.stream_started.wait()
     initial_l2_tx, start_ms_tx = buffer_tx[-1]
     # generate traffic
-    summary = await generate_traffic_async(rx, tx, bitrate, duration)
+    summary_sent, summary_received = await generate_traffic_async(rx, tx, bitrate, duration)
     rcv_errors = query_snmp_metric("Udp", "RcvbufErrors")
     NetworkInterfaceProcess.stop_collection.set()
     # snapshot L2 stats immediately after the test
@@ -410,31 +431,51 @@ async def run_test(rx, tx, bitrate, duration, buffer_tx, buffer_rx):
     delta_rx = calculate_deltas(initial_l2_rx, final_l2_rx)
     delta_tx = calculate_deltas(initial_l2_tx, final_l2_tx)
     time_diff_ms = end_ms_tx - start_ms_tx 
-    print("\n=== NIC STATISTICS ===")
-    print(f"RX packets: {delta_rx['rx_packets']}")
-    print(f"RX bytes: {delta_rx['rx_bytes']}")
-    print(f"RX drops: {delta_rx['rx_dropped']}")
-    print(f"RX errors: {delta_rx['rx_errors']}")
-    print(f"RX CRC errors: {delta_rx['rx_crc_errors']}")
-    print(f"RX missed: {delta_rx['rx_missed_errors']}")
+    # packets starts in userspace
+    print("\n=== SENDER APPLICATION (IPERF3) ===")
+    print(f"UDP sender bitrate (bit/s): {summary_sent['bits_per_second']}")
+    print(f"UDP datagrams sent: {summary_sent['packets']}")
+    # packets get copied to kernel space; qdisc is the kernel's traffic control scheduler
+    # tracking this along with routing table / firewalls lets us know if packets were dropped 
+    # within the kernel
+    print("\n=== LINUX TX PATH (QDisc) ===")
+    print(f"QDisc drops: {delta_tx['qdisc_drops']}")
+    print(f"QDisc backlog: {final_l2_tx['qdisc_backlog'][1]}")
+    print(f"QDisc requeues: {delta_tx['qdisc_requeues']}")
+    # packets get referenced by the NIC's descriptor rings and then copied to staging registre
+    # before going across the wire
+    print("\n=== LINUX TX INTERFACE (RUN DELTAS) ===")
     print(f"TX packets: {delta_tx['tx_packets']}")
     print(f"TX bytes: {delta_tx['tx_bytes']}")
-    print(f"TX drops: {delta_tx['tx_dropped']}")
-    print(f"TX errors: {delta_tx['tx_errors']}")
-    print("\n=== IPERF3 SUMMARY ===")
-    print(f"Bits per second: {summary['bits_per_second']}")
-    print(f"Loss percent: {summary['lost_percent']}")
-    print(f"Jitter ms: {summary['jitter_ms']}")
-    print(f"Time: {time_diff_ms}")
-    print(f"RcvBufErrors: {rcv_errors}")
+    print(f"TX drops (tx_dropped): {delta_tx['tx_dropped']}")
+    print(f"TX errors (total): {delta_tx['tx_errors']}")
+    print(f"TX counter snapshot span (ms): {time_diff_ms:.3f}")
+    # packets arrive on the receiving side NIC 
+    print("\n=== LINUX RX INTERFACE (RUN DELTAS) ===")
+    print(f"RX packets: {delta_rx['rx_packets']}")
+    print(f"RX bytes: {delta_rx['rx_bytes']}")
+    print(f"RX drops (rx_dropped): {delta_rx['rx_dropped']}")
+    print(f"RX errors (total): {delta_rx['rx_errors']}")
+    print(f"RX CRC errors: {delta_rx['rx_crc_errors']}")
+    print(f"RX missed packets (rx_missed_errors): {delta_rx['rx_missed_errors']}")
+    # packets get referenced via descriptor ring and copied via DMA to kernelspace
+    print("\n=== LINUX RX UDP SOCKET QUEUE ===")
+    print(f"UDP receive buffer errors (RX namespace, cumulative): {rcv_errors}")
+    # packets arrive at their destination: the userspace application
+    print("\n=== RECEIVER APPLICATION (IPERF3 END-TO-END RESULTS) ===")
+    print(f"UDP receiver goodput (bit/s): {summary_received['bits_per_second']}")
+    print(f"UDP datagrams used to calculate loss: {summary_received['packets']}")
+    print(f"UDP datagrams reported missing: {summary_received['lost_packets']}")
+    print(f"UDP datagram loss (%): {summary_received['lost_percent']}")
+    print(f"UDP jitter (ms): {summary_received['jitter_ms']}")
 
-async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args):
+async def app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args, client):
     # want tx and rx statistics to be monitored concurrently with asyncio
-    monitor_tx = asyncio.create_task(monitor(tx_conn_2, buffer_tx, args.tx_file))
-    monitor_rx = asyncio.create_task(monitor(rx_conn_2, buffer_rx, args.rx_file))
+    monitor_tx = asyncio.create_task(monitor(True, tx_conn_2, buffer_tx, args.tx_file, client))
+    monitor_rx = asyncio.create_task(monitor(False, rx_conn_2, buffer_rx, args.rx_file, client))
     # print out all the interfaces found on the machine
     NetworkInterface.discover_interfaces()
-    # create the tx and rx interfaces from command line arguments
+    # create the tx and rx interfaces from command line arguments   
     tx = NetworkInterfaceProcess(args.tx_interface, args.tx_ip, None, NetworkInterface.STAT_NAMES["TX"], tx_conn_1)
     rx = NetworkInterfaceProcess(args.rx_interface, args.rx_ip, args.rx_namespace, NetworkInterface.STAT_NAMES["RX"], rx_conn_1)
     # calling start to launch the per-interface threads
@@ -464,6 +505,7 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=int, default=10)
     parser.add_argument("--tx_file", default="tx.txt")
     parser.add_argument("--rx_file", default="rx.txt")
+    parser.add_argument("socket_path")
     args = parser.parse_args()
     if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
         netns.remove(args.rx_namespace)
@@ -479,12 +521,19 @@ if __name__ == "__main__":
     # create buffers to store snapshots of data 
     buffer_tx = []
     buffer_rx = []
+    # Set the path for the Unix socket
+    socket_path = args.socket_path
+    # Create the Unix socket client
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    # Connect to the server
+    client.connect(socket_path)
     # viewing statistics in real time
     try:
         # creates the event loop for asyncio with the first coroutine as 'app'
-        asyncio.run(app(tx_conn_1, rx_conn_1,  tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args))
+        asyncio.run(app(tx_conn_1, rx_conn_1, tx_conn_2, rx_conn_2, buffer_tx, buffer_rx, args, client))
         # calling join at the end of the program for cleanup
         NetworkInterfaceProcess.joinall()
     finally:
         if args.rx_namespace is not None and args.rx_namespace in netns.listnetns():
             netns.remove(args.rx_namespace)
+        client.close()

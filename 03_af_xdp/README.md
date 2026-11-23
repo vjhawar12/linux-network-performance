@@ -1,6 +1,6 @@
 # Stage 3 — C++ AF_XDP
 
-**Status: planned.** Keep Python as the orchestration/reporting layer and implement an AF_XDP packet engine in C++ to explore high packet rates with shared buffers and descriptor rings.
+**Status: planned.** This experiment follows the [AF_PACKET Layer 2 test](../02_af_packet/README.md). It investigates how shared buffers, descriptor rings, and batching affect the cost of moving the same raw Ethernet traffic between a C++ application and the NIC. [Stage 1](../01_baseline/README.md) remains the UDP/IP benchmark for throughput and loss.
 
 [Main roadmap](../README.md) · [Stage 2](../02_af_packet/README.md) · [Shared design](../common/README.md)
 
@@ -8,7 +8,7 @@
 
 Can AF_XDP improve throughput, packets/s, or CPU efficiency compared with AF_PACKET by using UMEM, ring descriptors, batching, and **zero-copy when supported**?
 
-AF_XDP uses Linux XDP/driver facilities; it is not a universal promise of complete kernel bypass or zero copy. Driver, kernel, NIC and queue support must be verified and copy vs zero-copy mode recorded.
+AF_XDP uses Linux XDP and driver facilities. Verify the kernel, NIC, driver, and queue capabilities, and record whether each run uses copy or zero-copy mode.
 
 ## Intended implementation
 
@@ -35,4 +35,4 @@ Python should control the C++ engine at experiment-level granularity, never per 
 
 ## Measurements and target
 
-Track offered and achieved frames/s, application payload vs Ethernet line rate, sender/receiver sequence gaps, NIC counters, and CPU. Initial ambition is 10–40 GbE; **AF_XDP has no intrinsic 40G ceiling**. A feature-complete stage requires reproducible measurements on supported hardware, not merely compiling an AF_XDP sample.
+Track offered and achieved frames/s, payload throughput, Ethernet line rate, sequence gaps, NIC counters, and CPU use. Start with a single queue and repeatable comparisons on supported hardware. A 10–40 GbE test range is a hardware goal for the experiment.
