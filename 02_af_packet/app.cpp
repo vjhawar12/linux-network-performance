@@ -48,7 +48,16 @@ int app(int argc, char *argv[]) {
             PacketGenerator<PACKET_SIZE_BYTES> generator(source_mac_address, dest_mac_address, src_idx, payload, bitrate_s, deadline, generator_finished); 
             PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, num_packets, deadline);
             auto start = std::chrono::steady_clock::now(); 
-            std::thread trecv(&PacketReceiver<PACKET_SIZE_BYTES>::receive, &receiver, std::ref(generator_finished)); // 10 second deadline
+            std::exception_ptr recv_excptr, general_excptr;
+            std::thread trecv([&](){
+                try {
+                    receiver.receive(std::ref(generator_finished));
+                } catch (PacketReceiverError& e) {
+                    recv_excptr = std::current_exception(); 
+                } catch (std::runtime_error& e) {
+                    general_excptr = std::current_exception(); 
+                }
+            }); 
             auto end = std::chrono::steady_clock::now(); 
             try {
                 generator.generate(duration_s);
@@ -64,6 +73,12 @@ int app(int argc, char *argv[]) {
             }
             results.tx_received = generator.get_tx_received();
             trecv.join();
+            if (recv_excptr) {
+                std::rethrow_exception(recv_excptr); 
+            }
+            if (general_excptr) {
+                std::rethrow_exception(general_excptr); 
+            }
             double real_elapsed_time = std::chrono::duration<double>(end - start).count();
             results.elapsed_time = real_elapsed_time;
             std::tie(results.rx_expected, results.rx_received, results.tp_drops, results.tp_packets) = receiver.get(); 
