@@ -13,8 +13,7 @@ PacketReceiver<packet_size>::PacketReceiver(
     int intf_idx,
     uint64_t num_packets_expected,
     uint16_t duration_s
-) : 
-    raw_socket(
+) : raw_socket(
     dest_mac_address,
     intf_idx
 ), duration_s(
@@ -23,6 +22,10 @@ PacketReceiver<packet_size>::PacketReceiver(
     buf = new char[packet_size];  
     try {
         raw_socket.bind_socket();
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = timeout_ms * 1000; // 20 ms
+        setsockopt(raw_socket.get_fd(), SO_RCVTIMEO, SO_SNDTIMEO, &tv, sizeof(tv)); 
     } catch (std::exception& e) {
         throw PacketReceiverError("Unable to bind socket!");
     }
@@ -34,18 +37,20 @@ void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_
         // using poll prevents blocking forever with recv and never exiting the loop
         ssize_t bytes_recvd = 0;
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(_deadline - std::chrono::steady_clock::now()).count();
-        poll(&_pollfd, 1, diff); 
-        if (_pollfd.revents & POLLIN) {
-            bytes_recvd = recv(raw_socket.get_fd(), buf, packet_size, 0); 
-            if (bytes_recvd < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    printf("Receive timed out.\n");
-                } else {
-                    perror("recv error");
-                }
+        if (diff <= 0) {
+            break;
+        }
+        // blocking recv with bounded timeout (default 20 ms) to avoid rechecking cond() infrequently
+        diff = static_cast<int>(std::min<decltype(diff)>(diff, timeout_ms)); 
+        bytes_recvd = recv(raw_socket.get_fd(), buf, packet_size, 0); 
+        if (bytes_recvd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                __timeouts++;
             } else {
-                num_packets_received++;
+                std::cerr << "recv error: errno = " << errno;
             }
+        } else {
+            num_packets_received++;
         }
     }
 }

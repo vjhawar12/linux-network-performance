@@ -14,8 +14,10 @@ private:
     const uint64_t num_packets_expected = 0; 
     char* buf = 0; 
     uint16_t duration_s = 0;
-    uint32_t tp_packets;
-    uint32_t tp_drops;
+    uint32_t tp_packets = 0;
+    uint32_t tp_drops = 0;
+    uint32_t __timeouts = 0;
+    uint32_t timeout_ms = 20;
     void _receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond);
 
 public:
