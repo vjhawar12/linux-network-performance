@@ -1,7 +1,5 @@
 #include "packet_receiver.h"
-#include <poll.h>
 #include <cstdint>
-#include <utility>
 #include <iostream>
 #include <chrono>
 #include <atomic>
@@ -35,16 +33,18 @@ deadline(
 }
 
 template<uint32_t packet_size>
-void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond) {
+void PacketReceiver<packet_size>::_receive(std::chrono::steady_clock::time_point _deadline, std::function<bool()>&& cond) {
     while (cond() && !ELAPSED_MS(std::chrono::steady_clock::now(), _deadline)) {
         ssize_t bytes_recvd = 0;
         // blocking recv with bounded timeout (default 20 ms) to avoid rechecking cond() infrequently
         bytes_recvd = recv(raw_socket.get_fd(), buf, packet_size, 0); 
         if (bytes_recvd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                __timeouts++;
+                timeouts_++;
+            } else if (errno == EINTR) {
+                continue;
             } else {
-                std::cerr << "recv error: errno = " << errno;
+                throw PacketReceiverError("recv error: errno = " + std::to_string(errno)); 
             }
         } else {
             num_packets_received++;
@@ -54,13 +54,10 @@ void PacketReceiver<packet_size>::_receive(pollfd& _pollfd, std::chrono::steady_
 
 template <uint32_t packet_size>
 void PacketReceiver<packet_size>::receive(std::atomic<bool>& generator_finished) {
-    pollfd _pollfd{};
-    _pollfd.fd = raw_socket.get_fd();
-    _pollfd.events = POLLIN;
-    _receive(_pollfd, deadline, [&generator_finished](){return !generator_finished.load();});
+    _receive(deadline, [&generator_finished](){return !generator_finished.load();});
     // drain queue for a short period after generator finishes to catch stragglers
     auto drain_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-    _receive(_pollfd, drain_deadline, [&drain_deadline](){return std::chrono::steady_clock::now() < drain_deadline;});
+    _receive(drain_deadline, [&drain_deadline](){return std::chrono::steady_clock::now() < drain_deadline;});
     // retrieve socket statistics from PACKET_STATISTICS structure
     // it gets reset upon reading, so we read it once at the end
     struct tpacket_stats stats;

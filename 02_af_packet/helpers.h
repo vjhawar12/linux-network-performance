@@ -101,6 +101,7 @@ typedef struct results_t {
     uint32_t tp_packets;
     double throughput_bps;
     double elapsed_time;
+    double lp;
 } results_t;
 
 int intf_name_to_index(std::string intf_name);
