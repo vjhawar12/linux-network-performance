@@ -28,6 +28,7 @@
 #include <vector>
 #include "helpers.h" 
 #include <arpa/inet.h>
+#include <immintrin.h>
 
 MacAddress::MacAddress(const std::string& mac_addr_str) {
     if  (mac_addr_str.size() != 17) {
@@ -280,6 +281,19 @@ void print(std::vector<NetworkInterface> intf_list) {
             << " link " << (*it).link_up
             << std::endl;
         }
+    }
+}
+
+void high_performance_busy_wait(uint32_t time_ms) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(time_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        _mm_pause(); // busy waits but doesn't starve sibling hyperthreads
+    }
+}
+
+void high_performance_busy_wait(std::chrono::steady_clock::time_point deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
+        _mm_pause(); // busy waits but doesn't starve sibling hyperthreads
     }
 }
 
