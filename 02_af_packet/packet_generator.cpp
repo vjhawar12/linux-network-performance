@@ -54,12 +54,12 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
     uint64_t sequence_idx = 0; 
     uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8);
     uint16_t interval_ms = 200; 
-    uint64_t packets_left_next_interval = total_packets / interval_ms;
+    uint16_t regular_packet_load = (interval_ms / (1000 * duration_s)) * total_packets; 
+    uint64_t packets_scheduled = regular_packet_load;
     uint64_t packets_sent_this_interval = 0; 
-    int64_t time_left_ms = 0; 
-    while (!ELAPSED_MS(std::chrono::steady_clock::now(), deadline)) {
-        packets_this_frame = 0;  
-        while (!ELAPSED_1MS(std::chrono::steady_clock::now()) && packets_sent_this_interval < packets_left_next_interval) {
+    while (!ELAPSED_MS(std::chrono::steady_clock::now(), deadline) && transmitted_packets < total_packets) {
+        packets_sent_this_interval = 0; 
+        while (!ELAPSED_1MS(std::chrono::steady_clock::now())) {
             frame.set_sequence_number(sequence_idx); 
             ret = sendto(
                 raw_socket.get_fd(), 
@@ -74,20 +74,20 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
                 throw PacketGeneratorError("sendto failed with errno = " + std::to_string(errno)); 
             } else {
                 transmitted_packets++;
-                packets_sent_this_interval++;
+                packets_sent_this_interval++; 
                 sequence_idx++;
             }
         }
         time_left_ms = TIME_LEFT_MS(std::chrono::steady_clock::now());
-        if (time_left_ms > 0) {
+        if (time_left_ms > 0){
+            // schedule the usual load
+            packets_scheduled = std::min(regular_packet_load, total_packets - transmitted_packets);
             // busy wait until the next interval
             high_performance_busy_wait(time_left_ms);     
-            // schedule the usual load
-            packets_left_next_interval = total_packets / interval_ms; 
-        } else {
-            // compute remaining packets from this interval and schedule them for the next interval
-            // along with the usual load
-            packets_left_next_interval = (total_packets / interval_ms) + (packets_left_next_interval - packets_sent_this_interval); 
+        } else if (time_left_ms < 0) {
+            // schedule a slightly larger load than usual to cover up for the packets that weren't sent
+            // but not large enough to cause a microburst leading to artifical packet drop 
+            packets_scheduled = std::min(regular_packet_load * 1.5, total_packets - transmitted_packets);
         }
     }
     finished = true;
