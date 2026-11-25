@@ -23,7 +23,7 @@
 // return true if deadline elapsed else false
 #define ELAPSED_MS(now_, deadline_) ((std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count()) <= 0)
 #define ELAPSED_1MS(now_) (ELAPSED_MS(now_, now_ + std::chrono::milliseconds(1)))
-#define TIME_LEFT_MS(now_) (std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count())
+#define TIME_LEFT_MS(now_, deadline_) (std::chrono::duration_cast<std::chrono::milliseconds>(deadline_ - now_).count())
 
 typedef enum err_t {
     ERR_NONE,
@@ -118,5 +118,7 @@ int intf_name_to_index(std::string intf_name);
 void intf_index_to_name(int index, char* buf, size_t len);
 std::vector<NetworkInterface> discover();
 void print(std::vector<NetworkInterface> intf_list);
+void high_performance_busy_wait(uint32_t time_ms);
+void high_performance_busy_wait(std::chrono::steady_clock::time_point deadline); 
 
 #endif

@@ -53,13 +53,16 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
     int ret = 0; 
     uint64_t sequence_idx = 0; 
     uint64_t total_packets = bitrate_s * duration_s / (packet_size * 8);
-    uint16_t interval_ms = 200; 
-    uint16_t regular_packet_load = (interval_ms / (1000 * duration_s)) * total_packets; 
+    uint16_t interval_ms = 200;  
+    uint64_t regular_packet_load = (interval_ms / (1000 * duration_s)) * total_packets; 
+    uint64_t extended_packet_load  = 1.5 * regular_packet_load;
     uint64_t packets_scheduled = regular_packet_load;
     uint64_t packets_sent_this_interval = 0; 
+    auto interval_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval_ms);
     while (!ELAPSED_MS(std::chrono::steady_clock::now(), deadline) && transmitted_packets < total_packets) {
         packets_sent_this_interval = 0; 
-        while (!ELAPSED_1MS(std::chrono::steady_clock::now())) {
+        interval_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(interval_ms); 
+        while (!ELAPSED_MS(std::chrono::steady_clock::now(), interval_deadline)) {
             frame.set_sequence_number(sequence_idx); 
             ret = sendto(
                 raw_socket.get_fd(), 
@@ -78,7 +81,8 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
                 sequence_idx++;
             }
         }
-        time_left_ms = TIME_LEFT_MS(std::chrono::steady_clock::now());
+        auto time_left_ms = TIME_LEFT_MS(std::chrono::steady_clock::now(), interval_deadline);
+        if (time_left_ms == 0) continue;
         if (time_left_ms > 0){
             // schedule the usual load
             packets_scheduled = std::min(regular_packet_load, total_packets - transmitted_packets);
@@ -87,7 +91,7 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
         } else if (time_left_ms < 0) {
             // schedule a slightly larger load than usual to cover up for the packets that weren't sent
             // but not large enough to cause a microburst leading to artifical packet drop 
-            packets_scheduled = std::min(regular_packet_load * 1.5, total_packets - transmitted_packets);
+            packets_scheduled = std::min(extended_packet_load, total_packets - transmitted_packets);
         }
     }
     finished = true;
