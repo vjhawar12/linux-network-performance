@@ -297,4 +297,8 @@ void high_performance_busy_wait(std::chrono::steady_clock::time_point deadline) 
     }
 }
 
+void pin_cores() {
+    
+}
+
 template class EthernetFrame<PACKET_SIZE_BYTES>;

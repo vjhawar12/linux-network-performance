@@ -30,6 +30,8 @@ int app(int argc, char *argv[]) {
         }
         int src_idx = intf_name_to_index(source_intf_name); 
         int dest_idx = intf_name_to_index(destination_intf_name); 
+        std::atomic<bool> start_generator = false;
+        std::atomic<bool> start_receiver = false; 
         try {
             MacAddress dest_mac_address(_dest_mac); 
             MacAddress source_mac_address(_src_mac); 
@@ -47,8 +49,25 @@ int app(int argc, char *argv[]) {
             PacketReceiver<PACKET_SIZE_BYTES> receiver(dest_mac_address, dest_idx, deadline);
             auto start = std::chrono::steady_clock::now(); 
             std::exception_ptr recv_excptr, general_excptr;
+            int recv_core = 0; 
+            int gen_core = 0; 
+            // everything inside this lambda is run by the receiving thread because the lambda gets passed to the receiving thread
+            // and ultimately ends up in the stack of the receiver
             std::thread trecv([&](){
                 try {
+                    // determining which cpu cores the thread can be pinned to
+                    // and picking the first one
+                    cpu_set_t mask{};
+                    sched_getaffinity(0, sizeof(mask), &mask); 
+                    for (int i = 0; i < CPU_SETSIZE; i++) {
+                        if (CPU_ISSET(i, &mask)) {
+                            std::cout << "Core " << i << " available for core-pinning" << std::endl; 
+                            CPU_ZERO(&mask); 
+                            CPU_SET(i, &mask); 
+                            sched_setaffinity(0, 1, &mask);
+                            recv_core = i;
+                        }
+                    }
                     receiver.receive(std::ref(generator_finished));
                 } catch (PacketReceiverError& e) {
                     recv_excptr = std::current_exception(); 
@@ -58,6 +77,19 @@ int app(int argc, char *argv[]) {
             }); 
             auto end = std::chrono::steady_clock::now(); 
             try {
+                // determining which cpu cores the thread can be pinned to
+                // and picking the first one, ensuring we don't pick the receive core
+                cpu_set_t mask{};
+                sched_getaffinity(0, sizeof(mask), &mask); 
+                for (int i = 0; i < CPU_SETSIZE; i++) {
+                    if (i != recv_core && CPU_ISSET(i, &mask)) {
+                        std::cout << "Core " << i << " available for core-pinning" << std::endl; 
+                        CPU_ZERO(&mask); 
+                        CPU_SET(i, &mask); 
+                        sched_setaffinity(0, 1, &mask);
+                        gen_core = i;
+                    }
+                }
                 generator.generate(duration_s);
                 end = std::chrono::steady_clock::now();
             } catch (PacketGeneratorError& e) {

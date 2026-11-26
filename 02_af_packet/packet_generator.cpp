@@ -83,12 +83,12 @@ void PacketGenerator<packet_size>::generate(uint32_t duration_s) {
         }
         auto time_left_ms = TIME_LEFT_MS(std::chrono::steady_clock::now(), interval_deadline);
         if (time_left_ms == 0) continue;
-        if (time_left_ms > 0){
+        else if (time_left_ms > 0) {
             // schedule the usual load
             packets_scheduled = std::min(regular_packet_load, total_packets - transmitted_packets);
             // busy wait until the next interval
             high_performance_busy_wait(time_left_ms);     
-        } else if (time_left_ms < 0) {
+        } else {
             // schedule a slightly larger load than usual to cover up for the packets that weren't sent
             // but not large enough to cause a microburst leading to artifical packet drop 
             packets_scheduled = std::min(extended_packet_load, total_packets - transmitted_packets);
