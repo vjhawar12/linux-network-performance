@@ -61,7 +61,7 @@ int app(int argc, char *argv[]) {
                     sched_getaffinity(0, sizeof(mask), &mask); 
                     for (int i = 0; i < CPU_SETSIZE; i++) {
                         if (CPU_ISSET(i, &mask)) {
-                            std::cout << "Core " << i << " available for core-pinning" << std::endl; 
+                            std::cout << "Core " << i << " available to receiver for core-pinning" << std::endl; 
                             CPU_ZERO(&mask); 
                             CPU_SET(i, &mask); 
                             sched_setaffinity(0, 1, &mask);
@@ -83,7 +83,7 @@ int app(int argc, char *argv[]) {
                 sched_getaffinity(0, sizeof(mask), &mask); 
                 for (int i = 0; i < CPU_SETSIZE; i++) {
                     if (i != recv_core && CPU_ISSET(i, &mask)) {
-                        std::cout << "Core " << i << " available for core-pinning" << std::endl; 
+                        std::cout << "Core " << i << " available to generator for core-pinning" << std::endl; 
                         CPU_ZERO(&mask); 
                         CPU_SET(i, &mask); 
                         sched_setaffinity(0, 1, &mask);
